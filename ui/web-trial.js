@@ -1,7 +1,7 @@
 // 人が操作した内容は自己申告として保存する。リンクを開いただけで試用済みにはしない。
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="review-token"]').content;
-let view, busy = false, displacedDraft = null;
+let view, busy = false, displacedDraft = null, handoffRevision = null;
 let sessionId = new URL(location.href).searchParams.get('session');
 const outcomes = { completed: '操作を終えた', blocked: '途中で進めなくなった', not_tried: '試せなかった' };
 function h(tag, attrs = {}, ...children) {
@@ -52,7 +52,10 @@ async function change(action, actor, reason) {
 }
 function selectSession(id) {
   sessionId = id;
+  // フォームの下書きを保持する間は、対応する比較の版も保持する。
+  if (handoffRevision === null) $('handoff-notice').hidden = true;
   const url = new URL(location.href);
+  for (const key of ['check', 'before', 'after', 'revision']) url.searchParams.delete(key);
   url.searchParams.set('session', id);
   history.replaceState(null, '', url);
   render();
@@ -152,16 +155,23 @@ for (const label of ['a', 'b']) {
     field('OSSリポジトリ（所有者/名前）', label + '-repository', text(label + '-repository')),
     field('固定コミット（40桁）', label + '-commit', text(label + '-commit', { pattern: '[a-f0-9]{40}', maxlength: 40 })),
     field('対応するコードのパス', label + '-path', text(label + '-path', { maxlength: 1024 })),
-    field('参照行', label + '-line', text(label + '-line', { type: 'number', min: 1, max: 1000000, value: 1 })),
+    field('参照の開始行', label + '-line', text(label + '-line', { type: 'number', min: 1, max: 1000000, value: 1 })),
+    field('参照の終了行', label + '-end-line', text(label + '-end-line', { type: 'number', min: 1, max: 1000000, value: 1 })),
     field('試用環境のURL', label + '-url', text(label + '-url', { type: 'url', maxlength: 2048 }), 'localhostまたはループバックのURL。起動と終了は技術者が行います。'),
     field('検証記録のID（任意）', label + '-evidence', text(label + '-evidence', { required: false, maxlength: 2000 }), '複数ある場合はカンマで区切ります。')));
 }
 $('plan-form').addEventListener('submit', event => {
   event.preventDefault();
   guarded(async () => {
-    const variants = ['a', 'b'].map(label => ({ label, source: { repository: read(label + '-repository'), commit: read(label + '-commit'), path: read(label + '-path'), line: Number(read(label + '-line')), end_line: Number(read(label + '-line')) }, url: read(label + '-url'), evidence_ids: read(label + '-evidence').split(',').map(x => x.trim()).filter(Boolean) }));
+    if (handoffRevision !== null && handoffRevision !== view.workspace.revision) throw Error('比較した後に記録が更新されています。入力を控えて、技術者の検証画面で比較し直してください。');
+    const variants = ['a', 'b'].map(label => ({ label, source: { repository: read(label + '-repository'), commit: read(label + '-commit'), path: read(label + '-path'), line: Number(read(label + '-line')), end_line: Number(read(label + '-end-line')) }, url: read(label + '-url'), evidence_ids: read(label + '-evidence').split(',').map(x => x.trim()).filter(Boolean) }));
     await change({ op: 'add_user_trial_plan', plan: { id: 'web-' + crypto.randomUUID(), concern: read('concern'), task: read('task'), conditions: read('conditions'), variants } }, read('preparer'), '固定版と条件を対応づけたWeb試用計画を登録した');
     $('plan-form').reset();
+    handoffRevision = null;
+    $('handoff-notice').hidden = true;
+    const url = new URL(location.href);
+    for (const key of ['check', 'before', 'after', 'revision']) url.searchParams.delete(key);
+    history.replaceState(null, '', url);
     $('prepare').open = false;
     render();
     $('status').textContent = '試用計画を登録しました。利用者が試す内容を選べます。';
@@ -188,6 +198,10 @@ async function reload() {
       renderDisplacedDraft();
     }
   }
+  if (handoffRevision !== null && handoffRevision !== view.workspace.revision) {
+    $('handoff-notice').textContent = '比較した後に記録が更新されたため、この下書きは登録できません。入力は残しています。技術者の検証画面で最新の記録を比較し直してください。';
+    $('handoff-notice').hidden = false;
+  }
 }
 $('choose-plan').addEventListener('click', () => {
   sessionId = null;
@@ -197,4 +211,35 @@ $('choose-plan').addEventListener('click', () => {
   render();
 });
 $('reload').addEventListener('click', () => guarded(async () => { await reload(); $('status').textContent = '最新の記録を読み込みました。'; }));
-await guarded(reload);
+async function prepareFromComparison() {
+  const requestedLocation = location.href;
+  const params = new URLSearchParams(location.search);
+  const keys = ['check', 'before', 'after', 'revision'];
+  if (!keys.some(key => params.has(key))) return;
+  const reject = () => { throw Error('比較した記録を引き継げません。技術者の検証画面で、最新の二つの試行を選び直してください。'); };
+  if (params.has('session') || keys.some(key => params.getAll(key).length !== 1 || !params.get(key))) reject();
+  const revision = params.get('revision');
+  if (!/^[1-9][0-9]*$/.test(revision) || !Number.isSafeInteger(Number(revision)) || Number(revision) !== view.workspace.revision) reject();
+  const check = view.workspace.checks.find(check => check.id === params.get('check'));
+  if (!check) reject();
+  const comparison = await api('POST', 'compare', { expected_revision: Number(revision), check_id: check.id, before_id: params.get('before'), after_id: params.get('after') });
+  if (location.href !== requestedLocation) return;
+  const trials = [comparison.before, comparison.after];
+  const sources = trials.map(trial => trial.source);
+  if (sources.some(source => !source || !/^[a-f0-9]{40}$/.test(source.commit)) || sources[0].commit === sources[1].commit) reject();
+  if (trials.some((trial, index) => trial.execution_source && (trial.execution_source.repository !== sources[index].repository || trial.execution_source.commit !== sources[index].commit))) reject();
+  // 全項目を照合してから下書きへ反映する。上流とforkも、各版の実際の参照を保持する。
+  $('concern').value = check.text;
+  for (const [index, label] of ['a', 'b'].entries()) {
+    const source = sources[index];
+    for (const key of ['repository', 'commit', 'path', 'line']) $(label + '-' + key).value = source[key];
+    $(label + '-end-line').value = source.end_line;
+    $(label + '-evidence').value = trials[index].evidence.id;
+  }
+  handoffRevision = Number(revision);
+  $('handoff-notice').textContent = '比較した版と検証記録を下書きに引き継ぎました。試用する操作・条件・記入者と、手動で起動した試用環境のURLを記入してください。まだ登録していません。';
+  $('handoff-notice').hidden = false;
+  $('prepare').open = true;
+  $('task').focus();
+}
+await guarded(async () => { await reload(); await prepareFromComparison(); });
