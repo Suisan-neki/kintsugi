@@ -25,6 +25,7 @@
   <details id="prepare" class="box"><summary>技術者が試用を準備する</summary>
     <p>対象のOSSを2つの固定コミットで準備し、本番へ接続しない試用環境を起動してから登録します。登録後の内容は編集せず、変更時は新しい計画を作ります。</p>
     <p class="note">URLと版の対応は技術者が確認して記入します。麦漆はこの画面から環境を起動したり、URLの動作・コードの一致を検証したりしません。</p>
+    <p id="handoff-notice" role="status" hidden></p>
     <form id="plan-form">
       <label class="system-label" for="preparer">記入者名または識別名</label><input id="preparer" class="system-input" required maxlength="200" autocomplete="off">
       <label class="system-label" for="concern">改善したいこと</label><textarea id="concern" class="system-input" rows="3" maxlength="4000" required></textarea>

@@ -1095,7 +1095,9 @@ function compareForm(check, evidence) {
         h('figure', { class: 'dads-table' }, h('figcaption', { class: 'dads-table__caption' }, '異なる項目・確認できない項目'), h('table', { class: 'dads-table__table', 'data-cell-border': 'bottom' },
           h('thead', {}, h('tr', {}, ['項目', '状態', '前', '後'].map(t => h('th', { class: 'dads-table__col-header', scope: 'col' }, t)))),
           h('tbody', {}, changed.map(d => h('tr', {}, h('td', {}, label(d)), h('td', {}, d.status === 'changed' ? '異なる' : '確認できない'), h('td', {}, h('pre', { class: 'output' }, short(d.before))), h('td', {}, h('pre', { class: 'output' }, short(d.after)))))))),
-        h('ul', { class: 'items' }, res.limits.map(l => h('li', {}, l)))));
+        h('ul', { class: 'items' }, res.limits.map(l => h('li', {}, l))),
+        h('p', {}, h('a', { href: '/user-trial?' + new URLSearchParams({ check: res.check_id, before: res.before.evidence.id, after: res.after.evidence.id, revision: res.case_revision }) }, 'この比較から試用を準備する')),
+        h('p', { class: 'note' }, '対象の版と検証記録を下書きへ引き継ぎます。試用する操作・条件と、起動した試用環境のURLは技術者が確認して記入します。')));
       setStatus('二つの試行を比べました。');
     })), out);
 }

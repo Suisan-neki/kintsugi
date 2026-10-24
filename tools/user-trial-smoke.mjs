@@ -1,13 +1,17 @@
 // 実Rust APIとブラウザで人の試用記録を検査する。対象OSSの実行・人の試用は実施しない。
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { chromium } from 'playwright';
 const root = resolve(import.meta.dirname, '..');
 const temporary = await mkdtemp(join(tmpdir(), 'mugiurushi-user-trial-'));
 const binary = process.env.REVIEW_BINARY || join(root, 'target/debug/mugiurushi');
+// 画面からの読取に使う合成リポジトリ。ネットワークや実OSSの評価を代替しない。
+const snapshot = JSON.parse(await readFile(join(root, 'tests/fixtures/reader/system.json'), 'utf8'));
+await mkdir(join(temporary, 'app', 'snapshots', snapshot.fullName), { recursive: true });
+for (const commit of ['a'.repeat(40), 'b'.repeat(40)]) await writeFile(join(temporary, 'app', 'snapshots', snapshot.fullName, commit + '.json'), JSON.stringify({ ...snapshot, commit }));
 let child, browser;
 async function start() {
   child = spawn(binary, ['app', join(temporary, 'app'), '--port', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -128,10 +132,76 @@ try {
   assert.equal(await page.locator('#outcome').inputValue(), '');
   await page.locator('#unsaved-draft').getByText('未保存の内容を見る', { exact: true }).click();
   await page.locator('#unsaved-draft').getByText('感想：Aにだけ対応する未保存の感想', { exact: true }).waitFor();
+  // 同じ確認事項の異なるコード版を比較し、登録前の試用下書きへ引き継ぐ。
+  const apply = async action => {
+    const current = await get();
+    const result = await post({ expected_revision: current.workspace.revision, actor: '合成の技術者', reason: '比較から試用準備への接続確認', action });
+    assert.equal(result.status(), 200, await result.text());
+    return result.json();
+  };
+  const checkId = 'example-record-system-handoff';
+  const source = commit => ({ repository: snapshot.fullName, commit: commit.repeat(40), path: 'server/main.py', line: 3, end_line: 5 });
+  await apply({ op: 'add_check', check: { id: checkId, version: 1, text: '合成の保存操作を確認する', origin: '合成の改善相談', source: source('a'), observation: null, rule: 'manual_only', dependencies: [], questions: [] } });
+  await apply({ op: 'configure_reported_observation', check_id: checkId, criterion: { assertion: 'readback', subject: 'synthetic-record' } });
+  for (const commit of ['a', 'b']) {
+    if (commit === 'b') await apply({ op: 'bind_source', check_id: checkId, source: source('b') });
+    const current = await get(), check = current.workspace.checks.find(c => c.id === checkId);
+    const correlation = { run_id: 'handoff-' + commit, record_id: 'synthetic-record', attempt_id: 'attempt-' + commit };
+    await apply({ op: 'import_reported', condition: { id: check.id, version: check.version, text: check.text, origin: check.origin, kind: 'custom' }, trace: { schema_version: 1, correlation, producer: '合成の報告元', origin: '接続試験のみ。OSSは未実行', completed: true, source: check.source, context: {}, observations: [{ sequence: 1, correlation, assertion: 'readback', subject: 'synthetic-record', outcome: 'pass', detail: '合成の成功報告', source: check.source }] } });
+  }
+  await page.goto(url + '/workbench?' + new URLSearchParams({ url: 'https://github.com/' + snapshot.fullName, ref: 'b'.repeat(40), check: checkId }) + '#result');
+  await page.getByRole('button', { name: '比べる', exact: true }).click();
+  const handoff = page.getByRole('link', { name: 'この比較から試用を準備する', exact: true });
+  await handoff.waitFor();
+  const href = await handoff.getAttribute('href');
+  assert.deepEqual([...new URL(href, url).searchParams.keys()], ['check', 'before', 'after', 'revision']);
+  const beforeHandoff = await get();
+  await handoff.click();
+  await page.locator('#handoff-notice:not([hidden])').waitFor();
+  assert.equal(await page.locator('#concern').inputValue(), '合成の保存操作を確認する');
+  assert.equal(await page.locator('#a-commit').inputValue(), 'a'.repeat(40));
+  assert.equal(await page.locator('#b-commit').inputValue(), 'b'.repeat(40));
+  assert.equal(await page.locator('#a-end-line').inputValue(), '5');
+  for (const id of ['task', 'conditions', 'preparer', 'a-url', 'b-url']) assert.equal(await page.locator('#' + id).inputValue(), '');
+  assert.equal((await get()).workspace.revision, beforeHandoff.workspace.revision, 'handoff must not write');
+  for (const invalid of [
+    { revision: String(beforeHandoff.workspace.revision - 1) },
+    { before: 'missing-evidence' },
+    { after: new URL(href, url).searchParams.get('before') },
+    { check: 'missing-check' },
+  ]) {
+    const query = new URL(href, url); for (const [key, value] of Object.entries(invalid)) query.searchParams.set(key, value);
+    await page.goto(query.href);
+    await page.locator('#alert .box').waitFor();
+    for (const id of ['concern', 'a-commit', 'b-commit', 'a-evidence', 'b-evidence']) assert.equal(await page.locator('#' + id).inputValue(), '', 'invalid handoff must not partially prefill');
+  }
+  assert.equal((await get()).workspace.revision, beforeHandoff.workspace.revision);
+  const mismatchedSource = { ...source('b'), repository: 'different/repository' };
+  await apply({ op: 'bind_source', check_id: checkId, source: mismatchedSource });
+  v = await get();
+  const mismatchedCheck = v.workspace.checks.find(c => c.id === checkId);
+  const correlation = { run_id: 'handoff-mismatch', record_id: 'synthetic-record', attempt_id: 'mismatch' };
+  await apply({ op: 'import_reported', condition: { id: checkId, version: mismatchedCheck.version, text: mismatchedCheck.text, origin: mismatchedCheck.origin, kind: 'custom' }, trace: { schema_version: 1, correlation, producer: '合成の別リポジトリ', origin: '不正な引継ぎの検査用', completed: true, source: mismatchedSource, context: {}, observations: [] } });
+  v = await get();
+  const mismatchedQuery = new URL(href, url);
+  mismatchedQuery.searchParams.set('revision', v.workspace.revision);
+  mismatchedQuery.searchParams.set('after', v.workspace.evidence.at(-1).id);
+  await page.goto(mismatchedQuery.href);
+  await page.locator('#alert .box').waitFor();
+  assert.equal(await page.locator('#concern').inputValue(), '');
+  assert.equal(await page.locator('#b-repository').inputValue(), '');
+  assert.equal((await get()).workspace.revision, v.workspace.revision);
+  const validQuery = new URL(href, url); validQuery.searchParams.set('revision', v.workspace.revision);
+  await page.goto(validQuery.href);
+  await page.locator('#handoff-notice:not([hidden])').waitFor();
   await mkdir(join(root, 'test-results'), { recursive: true });
   await page.screenshot({ path: join(root, 'test-results/user-trial.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'mobile page must not overflow horizontally');
+  await page.getByRole('button', { name: '記録を見る', exact: true }).first().click();
+  assert.equal(new URL(page.url()).searchParams.has('check'), false);
+  await page.reload();
+  await page.getByText('A・Bの記録を保存しました。', { exact: false }).waitFor();
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ checks: ['plan form without diagram', 'B then A operation and feedback', 'links carry no review token and disown opener', 'no feedback from opening link', 'conflict preserves draft after refresh', 'concurrent advance never moves A draft into B', 'escaped feedback', 'session reload and restart persistence', 'not tried stays separate', 'no QA verdict or adoption change', 'API authentication'], oss_execution: 'not_run', actual_user_trial: 'not_conducted' }));
+  console.log(JSON.stringify({ checks: ['plan form without diagram', 'B then A operation and feedback', 'links carry no review token and disown opener', 'no feedback from opening link', 'conflict preserves draft after refresh', 'concurrent advance never moves A draft into B', 'escaped feedback', 'session reload and restart persistence', 'not tried stays separate', 'no QA verdict or adoption change', 'API authentication', 'comparison-to-trial draft without writes', 'source range retained', 'stale or mismatched handoff rejected without partial prefill'], oss_execution: 'not_run', actual_user_trial: 'not_conducted' }));
 } finally { await stop(); await browser?.close(); await rm(temporary, { recursive: true, force: true }); }
