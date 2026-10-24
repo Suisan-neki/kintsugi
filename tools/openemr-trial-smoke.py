@@ -40,7 +40,7 @@ try:
     deadline = time.monotonic() + 10
     while True:
         remaining = any("tcp://127.0.0.1:443" in subprocess.check_output(
-            ["docker", "top", container, "-eo", "args"], text=True) for container in running.values())
+            ["docker", "top", container, "-eo", "pid,args", "-ww"], text=True) for container in running.values())
         if not remaining:
             break
         if time.monotonic() >= deadline:
