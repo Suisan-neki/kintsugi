@@ -1,6 +1,11 @@
 """The manual trial must keep both disposable environments and their records separate."""
 import importlib.util
 import json
+import socket
+import sys
+import threading
+import time
+from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import unittest
@@ -40,19 +45,12 @@ class TrialTest(unittest.TestCase):
             self.assertEqual(app["networks"], [label])
             self.assertTrue(compose["networks"][label]["internal"])
             self.assertNotIn("ports", db)
-            self.assertEqual(app["ports"], [{"target": 443, "published": "0", "host_ip": "127.0.0.1", "protocol": "tcp"}])
+            self.assertNotIn("ports", app)
             self.assertEqual(db["volumes"], ["db-" + label + ":/var/lib/mysql"])
             self.assertNotIn("volumes", app)
             self.assertEqual(app["environment"]["MYSQL_HOST"], "mysql-" + label)
         with self.assertRaises(FileExistsError):
             self.prepare()
-
-    def test_old_engine_with_localhost_publish_bug_is_rejected(self):
-        with patch.object(trial.subprocess, "check_output", return_value="27.5.1\n"):
-            with self.assertRaisesRegex(ValueError, "28"):
-                trial.check_engine()
-        with patch.object(trial.subprocess, "check_output", return_value="28.0.0\n"):
-            trial.check_engine()
 
     def test_identical_images_need_explicit_setup_only_flag(self):
         with self.assertRaisesRegex(ValueError, "同じイメージ"):
@@ -82,51 +80,124 @@ class TrialTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "異なるコミット"):
             self.prepare()
 
-    def test_status_never_offers_public_url(self):
+    def test_status_rejects_all_published_container_ports(self):
         manifest = self.prepare()
         row = {"Service": "openemr-a", "State": "running", "Publishers": [
-            {"TargetPort": 443, "PublishedPort": 34567, "URL": "0.0.0.0"}]}
+            {"TargetPort": 443, "PublishedPort": 34567, "URL": "127.0.0.1"}]}
         with patch.object(trial, "docker") as docker:
             docker.return_value.stdout = json.dumps(row)
-            with self.assertRaisesRegex(ValueError, "127.0.0.1"):
+            with self.assertRaisesRegex(ValueError, "公開ポート"):
                 trial.status(self.output, manifest)
 
-    def test_missing_binding_is_reported_without_env_secrets(self):
+    def test_ready_urls_require_owned_forwarder_and_status_does_not_erase_them(self):
         manifest = self.prepare()
-        row = {"Service": "openemr-a", "ID": "a" * 64, "State": "running", "Publishers": None}
-        with patch.object(trial, "docker") as docker, patch.object(trial.subprocess, "check_output") as inspect:
-            docker.return_value.stdout = json.dumps(row)
-            inspect.side_effect = ['{"443/tcp":[{"HostIp":"127.0.0.1","HostPort":"0"}]}', '{"443/tcp":null}']
-            with self.assertRaisesRegex(ValueError, "割り当てていません"):
-                trial.status(self.output, manifest)
-        saved = trial.load(self.output)
-        self.assertEqual(saved["port_diagnostic"]["actual"], {"443/tcp": None})
-        self.assertEqual(saved["state"], "port_unavailable")
-        self.assertTrue(all(".Config.Env" not in str(call) for call in inspect.call_args_list))
-
-    def test_ready_urls_have_distinct_hosts_and_no_query_or_credentials(self):
-        manifest = self.prepare()
-        rows = [{"Service": "openemr-" + label, "State": "running", "Publishers": [
-            {"TargetPort": "443", "PublishedPort": str(port), "URL": "127.0.0.1"}]}
-                for label, port in [("a", 34001), ("b", 34002)]]
+        rows = [{"Service": "openemr-" + label, "ID": label * 64, "State": "running", "Publishers": None}
+                for label in ["a", "b"]]
+        pair = SimpleNamespace(containers={"A": "a" * 64, "B": "b" * 64}, port=lambda label: 34001 if label == "A" else 34002)
         with patch.object(trial, "docker") as docker, patch.object(trial.urllib.request, "build_opener") as opener:
             docker.return_value.stdout = json.dumps(rows)
             opener.return_value.open.return_value.__enter__.return_value.status = 200
-            result = trial.status(self.output, manifest)
+            result = trial.status(self.output, manifest, pair)
+            saved = (self.output / "trial.json").read_bytes()
+            inspection = trial.status(self.output, result)
         self.assertEqual(result["state"], "ready")
         self.assertEqual([v["url"] for v in result["variants"]], [
             "https://127.0.0.1:34001/interface/login/login.php",
             "https://localhost:34002/interface/login/login.php"])
+        self.assertEqual((self.output / "trial.json").read_bytes(), saved)
+        self.assertEqual(inspection["relay_status"], "last_recorded_not_live_probe")
         self.assertNotIn(json.loads((self.output / "credentials.json").read_text())["password"], json.dumps(result))
 
-    def test_no_containers_or_stopped_containers_are_not_ready(self):
-        for text in ["", "[]", '{"Service":"openemr-a","State":"exited","Publishers":null}']:
-            with self.subTest(text=text), patch.object(trial, "docker") as docker:
-                manifest = self.prepare() if not self.output.exists() else trial.load(self.output)
-                docker.return_value.stdout = text
-                result = trial.status(self.output, manifest)
-                self.assertEqual(result["state"], "not_ready")
-                self.assertTrue(all(v["url"] is None for v in result["variants"]))
+    def test_no_running_containers_never_creates_trial_url(self):
+        manifest = self.prepare()
+        with patch.object(trial, "docker") as docker:
+            docker.return_value.stdout = "[]"
+            result = trial.status(self.output, manifest)
+        self.assertEqual(result["containers_running"], [])
+        self.assertTrue(all(v["url"] is None for v in result["variants"]))
+
+    def test_only_one_serve_can_own_the_trial(self):
+        self.prepare()
+        with trial.serve_lock(self.output):
+            with self.assertRaises(FileExistsError):
+                with trial.serve_lock(self.output):
+                    self.fail("second owner was allowed")
+        self.assertFalse((self.output / "serve.lock").exists())
+
+
+class ForwardTest(unittest.TestCase):
+    def test_idle_connection_releases_subprocess(self):
+        client, server = socket.socketpair()
+        self.addCleanup(client.close)
+        self.addCleanup(server.close)
+        stop, children, lock = threading.Event(), set(), threading.Lock()
+        worker = threading.Thread(target=trial.forward.relay, args=(server,
+            [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"], stop, children, lock),
+            kwargs={"idle_seconds": 0.1})
+        worker.start()
+        worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(children, set())
+
+    def test_binary_large_response_after_client_half_close(self):
+        client, server = socket.socketpair()
+        self.addCleanup(client.close)
+        self.addCleanup(server.close)
+        client.settimeout(10)
+        stop, children, lock = threading.Event(), set(), threading.Lock()
+        command = [sys.executable, "-c", "import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data[::-1])"]
+        worker = threading.Thread(target=trial.forward.relay, args=(server, command, stop, children, lock))
+        worker.start()
+        payload = bytes(range(256)) * 4096
+        client.sendall(payload)
+        client.shutdown(socket.SHUT_WR)
+        result = bytearray()
+        while chunk := client.recv(32768):
+            result.extend(chunk)
+        worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(bytes(result), payload[::-1])
+        self.assertEqual(children, set())
+
+    def test_context_exit_closes_active_connection_and_reaps_child(self):
+        original = trial.forward.subprocess.Popen
+        processes = []
+        def stand_in(*args, **kwargs):
+            process = original([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"], **kwargs)
+            processes.append(process)
+            return process
+        with patch.object(trial.forward.subprocess, "Popen", side_effect=stand_in):
+            with trial.forward.ForwardPair({"A": "a" * 64, "B": "b" * 64}) as pair:
+                client = socket.create_connection(("127.0.0.1", pair.port("A")), timeout=3)
+                self.addCleanup(client.close)
+                client.sendall(b"unfinished request")
+                deadline = time.monotonic() + 3
+                while not processes and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(processes)
+            self.assertEqual(pair.children, set())
+            self.assertTrue(all(p.poll() is not None for p in processes))
+            self.assertTrue(all(not t.is_alive() for t in pair.threads))
+            self.assertEqual(client.recv(1), b"")
+
+    def test_connection_limit_rejects_excess_without_starting_child(self):
+        original = trial.forward.subprocess.Popen
+        processes = []
+        def stand_in(*args, **kwargs):
+            process = original([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"], **kwargs)
+            processes.append(process)
+            return process
+        with patch.object(trial.forward.subprocess, "Popen", side_effect=stand_in):
+            with trial.forward.ForwardPair({"A": "a" * 64, "B": "b" * 64}) as pair:
+                pair.capacity = threading.BoundedSemaphore(1)
+                first = socket.create_connection(("127.0.0.1", pair.port("A")), timeout=3)
+                self.addCleanup(first.close)
+                deadline = time.monotonic() + 3
+                while not processes and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                with socket.create_connection(("127.0.0.1", pair.port("B")), timeout=3) as excess:
+                    self.assertEqual(excess.recv(1), b"")
+                self.assertEqual(len(processes), 1)
 
 
 if __name__ == "__main__":
