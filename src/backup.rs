@@ -20,6 +20,119 @@ fn same(a: &(impl Serialize + ?Sized), b: &(impl Serialize + ?Sized)) -> io::Res
     Ok(serde_json::to_value(a).map_err(io::Error::other)?
         == serde_json::to_value(b).map_err(io::Error::other)?)
 }
+
+fn validate_trial_history(previous: &Workspace, current: &Workspace) -> io::Result<()> {
+    let plans = previous.user_trial_plans.len();
+    if current.user_trial_plans.len() < plans
+        || !same(
+            &current.user_trial_plans[..plans],
+            &previous.user_trial_plans,
+        )?
+        || current.user_trial_sessions.len() < previous.user_trial_sessions.len()
+    {
+        return Err(invalid("以前の試用計画・試用記録が書き換えられています"));
+    }
+    if current.user_trial_plans[plans..]
+        .iter()
+        .any(|plan| plan.created_revision != current.revision)
+        || current.user_trial_sessions[previous.user_trial_sessions.len()..]
+            .iter()
+            .any(|session| {
+                session.started_revision != current.revision || !session.feedback.is_empty()
+            })
+    {
+        return Err(invalid(
+            "試用計画・開始記録の版が最初に追加された版と一致しません",
+        ));
+    }
+    for (old, new) in previous
+        .user_trial_sessions
+        .iter()
+        .zip(&current.user_trial_sessions)
+    {
+        let mut metadata = new.clone();
+        metadata.feedback = old.feedback.clone();
+        if !same(old, &metadata)?
+            || new.feedback.len() < old.feedback.len()
+            || !same(&new.feedback[..old.feedback.len()], &old.feedback)?
+        {
+            return Err(invalid(
+                "以前の試用者・操作順序・感想が書き換えられています",
+            ));
+        }
+        if new.feedback.len() > old.feedback.len() + 1
+            || new.feedback[old.feedback.len()..]
+                .iter()
+                .any(|feedback| feedback.recorded_revision != current.revision)
+        {
+            return Err(invalid("感想の記録版が最初に追加された版と一致しません"));
+        }
+    }
+    Ok(())
+}
+
+fn trial_conditions_match(plan: &crate::user_trial::Plan, workspace: &Workspace) -> bool {
+    plan.context == workspace.context
+        && plan.check_versions.len() == workspace.checks.len()
+        && workspace
+            .checks
+            .iter()
+            .all(|check| plan.check_versions.get(&check.id) == Some(&check.version))
+}
+
+fn validate_trial_origins(backup: &Backup, workspace: &Workspace) -> io::Result<()> {
+    for plan in &workspace.user_trial_plans {
+        let before = &backup.revisions[plan.created_revision as usize - 2];
+        let created = &backup.revisions[plan.created_revision as usize - 1];
+        if !trial_conditions_match(plan, before)
+            || created.history.last().map(|audit| &audit.actor) != Some(&plan.recorded_by)
+            || !created.user_trial_plans.iter().any(|p| p.id == plan.id)
+            || plan.variants.iter().any(|variant| {
+                variant
+                    .evidence_ids
+                    .iter()
+                    .any(|id| !before.evidence.iter().any(|e| &e.id == id))
+            })
+        {
+            return Err(invalid(
+                "試用計画の条件・検証結果・記入者が作成時の事例版と一致しません",
+            ));
+        }
+    }
+    for session in &workspace.user_trial_sessions {
+        // workspace::validateが計画の存在と開始版の範囲を先に確認する。
+        let plan = workspace
+            .user_trial_plans
+            .iter()
+            .find(|p| p.id == session.plan_id)
+            .ok_or_else(|| invalid("試用計画がありません"))?;
+        let before = &backup.revisions[session.started_revision as usize - 2];
+        let started = &backup.revisions[session.started_revision as usize - 1];
+        if !trial_conditions_match(plan, before)
+            || started.history.last().map(|audit| &audit.actor) != Some(&session.recorded_by)
+            || !started
+                .user_trial_sessions
+                .iter()
+                .any(|s| s.id == session.id)
+        {
+            return Err(invalid("試用の条件・記入者が開始時の事例版と一致しません"));
+        }
+        for feedback in &session.feedback {
+            let recorded = &backup.revisions[feedback.recorded_revision as usize - 1];
+            if recorded.history.last().map(|audit| &audit.actor) != Some(&feedback.recorded_by)
+                || !recorded.user_trial_sessions.iter().any(|s| {
+                    s.id == session.id
+                        && s.feedback
+                            .iter()
+                            .any(|f| f.recorded_revision == feedback.recorded_revision)
+                })
+            {
+                return Err(invalid("感想の記入者・記録時の事例版が一致しません"));
+            }
+        }
+    }
+    Ok(())
+}
 pub fn validate(backup: &Backup) -> io::Result<()> {
     if backup.schema_version != 1
         || backup.revisions.is_empty()
@@ -50,8 +163,10 @@ pub fn validate(backup: &Backup) -> io::Result<()> {
         {
             return Err(invalid("バックアップの事例・版・更新履歴が一致しません"));
         }
+        validate_trial_origins(backup, w)?;
         if i > 0 {
             let previous = &backup.revisions[i - 1];
+            validate_trial_history(previous, w)?;
             if w.profile_history.len() < previous.profile_history.len()
                 || !same(
                     &w.profile_history[..previous.profile_history.len()],

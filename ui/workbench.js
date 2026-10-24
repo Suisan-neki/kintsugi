@@ -989,6 +989,16 @@ function renderResult() {
     evidence.length >= 2 ? compareForm(check, evidence) : null,
     disclosure('修正した版で再試験する', retestForm(check)),
     disclosure('判断を記録・確認する', decisionForm(check), decisionsList(check)));
+  const requested = new URLSearchParams(location.search).get('evidence');
+  if (requested && state.focusedEvidence !== requested) {
+    const target = [...body.querySelectorAll('[data-evidence]')].find(node => node.dataset.evidence === requested);
+    if (target) {
+      for (let parent = target.parentElement; parent && parent !== body; parent = parent.parentElement) if (parent.tagName === 'DETAILS') parent.open = true;
+      target.tabIndex = -1;
+      target.focus();
+      state.focusedEvidence = requested;
+    }
+  }
 }
 function evidenceCard(check, v, e) {
   const s = v.summary;

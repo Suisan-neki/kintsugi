@@ -454,7 +454,8 @@ try {
 
   // 実行環境がないとき。PATHにNode.jsだけを置き、python3を見つけられない状態で同じ記録を開き直す。
   // 40文字のコミットは保存した読取記録から開くため、GitHubへは問い合わせない。
-  const fullCommit = (await caseView()).workspace.checks.find(c => c.id === 'sjl-t-2').source.commit;
+  const finalCase = await caseView();
+  const fullCommit = finalCase.workspace.checks.find(c => c.id === 'sjl-t-2').source.commit;
   const main = servers[0];
   await new Promise(done => { main.once('exit', done); main.kill(); });
   const nodeOnly = join(temp, 'node-only');
@@ -476,6 +477,17 @@ try {
   assert.equal(await barePage.getByRole('button', { name: '実行前に確認する' }).isDisabled(), true);
   await barePage.screenshot({ path: join(output, 'app-no-runtime.png'), fullPage: true });
   log('python3が見つからないことを表示し、実行のボタンを止めた');
+
+  // 試用計画から過去の検証IDを開いた場合、最新の試行へ読み替えず対象の記録を開く。
+  const historical = finalCase.workspace.evidence.find(e => e.check_id === 'sjl-t-2');
+  const evidenceUrl = new URL('/workbench', bareUrl);
+  for (const [key, value] of Object.entries({ url: REPO, ref: historical.source.commit, check: historical.check_id, evidence: historical.id })) evidenceUrl.searchParams.set(key, value);
+  evidenceUrl.hash = 'result';
+  await barePage.goto(evidenceUrl.href);
+  const historicalCard = barePage.locator('[data-evidence]').filter({ has: barePage.getByRole('heading', { name: `試行 ${historical.manifest.correlation.run_id}`, exact: true }) });
+  await historicalCard.waitFor({ state: 'visible' });
+  assert.equal(await historicalCard.evaluate(node => document.activeElement === node), true);
+  log('試用計画から指定した過去の検証IDを開き、対応する試行へフォーカスした');
 
   // 試行は試験用のディレクトリに置き、データの保存先の外へ書いていない。
   const runs = await readdir(join(temp, 'data', 'case', 'runs'));

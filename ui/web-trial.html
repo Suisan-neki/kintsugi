@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="review-token" content="__REVIEW_TOKEN__">
+<title>麦漆｜変更前後を試す</title>
+<style>__APP_STYLE__</style>
+</head>
+<body>
+<a class="skip-link" href="#main">本文へ移動</a>
+<header class="site-header"><div class="container"><p class="site-title">麦漆｜変更前後を試す</p><nav class="button-row" aria-label="関連する作業"><a href="/">構成図と質問</a><a href="/workbench">技術者の検証</a></nav></div></header>
+<main id="main" class="container journey" tabindex="-1">
+  <h1>変更前後のアプリを操作して、感想を残す</h1>
+  <p>案内された操作をA・Bで試します。途中で困ったことや、試せなかった理由もそのまま記録できます。</p>
+  <p class="note">試用専用のデータを使ってください。実際の患者情報や認証情報を感想に書かないでください。</p>
+  <div id="status" class="status-line" role="status" aria-live="polite"></div>
+  <div id="alert" role="alert"></div>
+  <div id="unsaved-draft"></div>
+  <div class="button-row"><button id="reload" class="dads-button" data-type="text" data-size="sm" type="button">最新の記録を読み直す</button></div>
+  <section id="trial-list" class="panel" aria-labelledby="plans-heading"><h2 id="plans-heading">試す内容を選ぶ</h2><div id="plans"></div></section>
+  <button id="choose-plan" class="dads-button" data-type="text" data-size="sm" type="button" hidden>試す内容の一覧に戻る</button>
+  <section id="active-session" class="panel" aria-labelledby="session-heading" hidden><h2 id="session-heading" tabindex="-1">操作と感想</h2><div id="session-body"></div></section>
+  <section class="panel" aria-labelledby="history-heading"><h2 id="history-heading">残した試用記録</h2><div id="sessions"></div></section>
+  <details id="prepare" class="box"><summary>技術者が試用を準備する</summary>
+    <p>対象のOSSを2つの固定コミットで準備し、本番へ接続しない試用環境を起動してから登録します。登録後の内容は編集せず、変更時は新しい計画を作ります。</p>
+    <p class="note">URLと版の対応は技術者が確認して記入します。麦漆はこの画面から環境を起動したり、URLの動作・コードの一致を検証したりしません。</p>
+    <form id="plan-form">
+      <label class="system-label" for="preparer">記入者名または識別名</label><input id="preparer" class="system-input" required maxlength="200" autocomplete="off">
+      <label class="system-label" for="concern">改善したいこと</label><textarea id="concern" class="system-input" rows="3" maxlength="4000" required></textarea>
+      <label class="system-label" for="task">利用者に試してもらう操作</label><textarea id="task" class="system-input" rows="3" maxlength="4000" required></textarea>
+      <label class="system-label" for="conditions">試験用データ・環境・操作の条件</label><textarea id="conditions" class="system-input" rows="3" maxlength="4000" aria-describedby="conditions-help" required></textarea>
+      <p id="conditions-help" class="note">初期データ、環境の起動・終了方法、操作後のデータの扱いを記録してください。A・Bで条件が異なる場合は、その違いも書いてください。</p>
+      <div id="variant-fields" class="grid-2"></div>
+      <button class="dads-button" data-type="solid-fill" data-size="md" type="submit">試用計画を登録する</button>
+    </form>
+  </details>
+</main>
+<script type="module" src="/ui/web-trial.js"></script>
+</body>
+</html>

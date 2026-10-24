@@ -13,7 +13,9 @@
     "demo:queue": "node tools/queue-demo.mjs",
     "test:journey": "node tools/journey-smoke.mjs",
     "test:dialogue": "node tools/dialogue-smoke.mjs",
-    "test:ui": "npm run test:journey && npm run test:dialogue"
+    "test:user-trial": "node tools/user-trial-smoke.mjs",
+    "test:ui": "npm run test:journey && npm run test:dialogue && npm run test:user-trial",
+    "test:trial-plan": "node --test tools/openemr-trial-plan-tests.mjs"
   },
   "devDependencies": {
     "elkjs": "0.12.0",

@@ -23,6 +23,8 @@ jobs:
           node-version: 24.19.0
       - name: Verify the pinned yomiyasu rules and upstream checker
         run: python3 tools/check-yomiyasu.py
+      - name: Check version-bound OpenEMR trial plan requests
+        run: node --test tools/openemr-trial-plan-tests.mjs
       - run: node tools/queue-demo.mjs evaluations/ci-queue
       - run: node tools/pinned-demo.mjs evaluations/ci-external
       - run: node tools/backend-demo.mjs evaluations/ci-backend --live
@@ -31,6 +33,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:journey
       - run: npm run test:dialogue
+      - run: npm run test:user-trial
       - name: Operate the app against the public repository sjl/t
         env:
           GH_TOKEN: ${{ github.token }}

@@ -4,7 +4,7 @@ use crate::{
     workspace::{self, Check, CheckView, CodeReference, Decision, Workspace},
 };
 use serde::Serialize;
-use std::io;
+use std::{collections::BTreeMap, io};
 
 #[derive(Debug, Serialize)]
 pub struct ReportObservation {
@@ -31,6 +31,45 @@ pub struct ReportCheck {
     pub current: CheckView,
     pub references: Vec<EvidenceReference>,
 }
+/// 試用先URLと実行環境の内部設定は共有資料へ含めない。
+#[derive(Debug, Serialize)]
+pub struct ReportTrialVariant {
+    pub label: crate::user_trial::Label,
+    pub source: CodeReference,
+    pub evidence_ids: Vec<String>,
+}
+#[derive(Debug, Serialize)]
+pub struct ReportTrialPlan {
+    pub id: String,
+    pub concern: String,
+    pub task: String,
+    pub conditions: String,
+    pub variants: [ReportTrialVariant; 2],
+    pub created_revision: u64,
+    pub recorded_by: String,
+    pub check_versions: BTreeMap<String, u32>,
+    pub conditions_current: bool,
+}
+
+impl ReportTrialPlan {
+    fn from_plan(plan: crate::user_trial::Plan, conditions_current: bool) -> Self {
+        Self {
+            id: plan.id,
+            concern: plan.concern,
+            task: plan.task,
+            conditions: plan.conditions,
+            variants: plan.variants.map(|variant| ReportTrialVariant {
+                label: variant.label,
+                source: variant.source,
+                evidence_ids: variant.evidence_ids,
+            }),
+            created_revision: plan.created_revision,
+            recorded_by: plan.recorded_by,
+            check_versions: plan.check_versions,
+            conditions_current,
+        }
+    }
+}
 #[derive(Debug, Serialize)]
 pub struct Report {
     pub schema_version: u32,
@@ -47,10 +86,27 @@ pub struct Report {
     pub statements: Vec<crate::workspace::Statement>,
     pub architecture_models: Vec<crate::architecture::Model>,
     pub architecture_links: Vec<crate::architecture::Link>,
+    pub user_trial_plans: Vec<ReportTrialPlan>,
+    pub user_trial_sessions: Vec<crate::user_trial::Session>,
     pub limits: Vec<&'static str>,
 }
 pub fn build(workspace: Workspace) -> io::Result<Report> {
     workspace::validate(&workspace)?;
+    let check_versions: BTreeMap<_, _> = workspace
+        .checks
+        .iter()
+        .map(|check| (check.id.clone(), check.version))
+        .collect();
+    let current_trial_conditions: BTreeMap<_, _> = workspace
+        .user_trial_plans
+        .iter()
+        .map(|plan| {
+            (
+                plan.id.clone(),
+                plan.check_versions == check_versions && plan.context == workspace.context,
+            )
+        })
+        .collect();
     let (domain, selection_version) = profile::current(&workspace);
     let mut view = workspace::view(workspace);
     let checks = view
@@ -134,11 +190,22 @@ pub fn build(workspace: Workspace) -> io::Result<Report> {
         statements: view.workspace.statements,
         architecture_models: view.workspace.architecture_models,
         architecture_links: view.workspace.architecture_links,
+        user_trial_plans: view
+            .workspace
+            .user_trial_plans
+            .into_iter()
+            .map(|plan| {
+                let conditions_current = current_trial_conditions[&plan.id];
+                ReportTrialPlan::from_plan(plan, conditions_current)
+            })
+            .collect(),
+        user_trial_sessions: view.workspace.user_trial_sessions,
         limits: vec![
             "この資料は記載した事例版の確認結果です。システム全体の安全性や医療業務への適合を保証するものではありません。",
             "確認できていない範囲と、観測していないことによる判定不能を残しています。",
             "原文ログ・入力データ・認証情報・画面写真は含めません。条件文・構成の説明・質問・判断理由に記入された情報は含まれるため、共有前に内容を確認してください。",
             "元の事例は更新される可能性があります。根拠IDと試行IDを使い、同じ事例版の記録で照合してください。",
+            "人による試用の感想は自己申告です。自動試験の判定や合意とは区別します。試用先URLと内部の実行条件は省き、手順として記入した条件を含めます。共有前に試用者番号・操作・感想も確認してください。",
         ],
     })
 }
@@ -154,6 +221,77 @@ fn verdict(v: crate::model::Verdict) -> &'static str {
         crate::model::Verdict::Satisfied => "条件を満たす",
         crate::model::Verdict::NotSatisfied => "条件を満たさない",
         crate::model::Verdict::Unknown => "検証未通過（証拠不足・判定不能）",
+    }
+}
+
+fn trial_label(label: crate::user_trial::Label) -> &'static str {
+    match label {
+        crate::user_trial::Label::A => "A",
+        crate::user_trial::Label::B => "B",
+    }
+}
+
+fn user_trials(out: &mut String, report: &Report) {
+    if report.user_trial_plans.is_empty() {
+        return;
+    }
+    out.push_str("<h2>人によるWebアプリの試用</h2><p>操作と感想は自己申告です。自動試験の判定、保存状態の独立した確認、利用への合意とは区別します。</p>");
+    for plan in &report.user_trial_plans {
+        out.push_str(&format!(
+            "<section><h3>試用計画 {}</h3><p>相談：{}</p><p>試す操作：{}</p><p>試用条件・手順：{}</p><p>作成時の事例版{}／記入者：{}</p><p>{}</p><ul>",
+            escape(&plan.id), escape(&plan.concern), escape(&plan.task),
+            escape(&plan.conditions), plan.created_revision, escape(&plan.recorded_by),
+            if plan.conditions_current {
+                "計画作成時の確認条件・環境設定は、この資料の事例版と一致しています。"
+            } else {
+                "計画作成後に確認条件または環境設定が変わっています。以前の試用記録を現在の条件での試用とみなしません。"
+            }
+        ));
+        for variant in &plan.variants {
+            out.push_str(&format!(
+                "<li>{}：{}／{}／{} {}〜{}行目。検証結果の参照：{}</li>",
+                trial_label(variant.label),
+                escape(&variant.source.repository),
+                escape(&variant.source.commit),
+                escape(&variant.source.path),
+                variant.source.line,
+                variant.source.end_line,
+                if variant.evidence_ids.is_empty() {
+                    "記録なし".into()
+                } else {
+                    escape(&variant.evidence_ids.join("、"))
+                }
+            ));
+        }
+        out.push_str("</ul>");
+        let sessions: Vec<_> = report
+            .user_trial_sessions
+            .iter()
+            .filter(|session| session.plan_id == plan.id)
+            .collect();
+        if sessions.is_empty() {
+            out.push_str("<p>この計画で試用を開始した記録はありません。</p>");
+        }
+        for session in sessions {
+            out.push_str(&format!(
+                "<h4>試用 {}／試用者 {}</h4><p>開始時の事例版{}／操作順 {}→{}。感想の記録：{}件／2件</p>",
+                escape(&session.id), escape(&session.participant), session.started_revision,
+                trial_label(session.order[0]), trial_label(session.order[1]), session.feedback.len()
+            ));
+            for feedback in &session.feedback {
+                let outcome = match feedback.outcome {
+                    crate::user_trial::Outcome::Completed => "操作を完了したと申告",
+                    crate::user_trial::Outcome::Blocked => "途中で進めなくなったと申告",
+                    crate::user_trial::Outcome::NotTried => "試していないと申告",
+                };
+                out.push_str(&format!(
+                    "<p>{}：{outcome}</p><p>行った操作：{}</p><p>感想・残る困りごと：{}</p><p>記録時の事例版{}／記入者：{}／時刻 {} Unixミリ秒</p>",
+                    trial_label(feedback.variant), escape(&feedback.operation), escape(&feedback.feedback),
+                    feedback.recorded_revision, escape(&feedback.recorded_by), feedback.unix_ms
+                ));
+            }
+        }
+        out.push_str("</section>");
     }
 }
 pub fn html(report: &Report) -> io::Result<String> {
@@ -260,6 +398,7 @@ pub fn html(report: &Report) -> io::Result<String> {
         }
         out.push_str("</section>");
     }
+    user_trials(&mut out, report);
     if !report.architecture_models.is_empty() {
         out.push_str("<h2>構成と確認範囲</h2>");
         for model in &report.architecture_models {
