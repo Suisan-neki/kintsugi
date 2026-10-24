@@ -532,7 +532,7 @@
         "target": {
           "locator": {
             "by": "css",
-            "selector": "#tabs_div .tabSpan:not(.tabsNoHover) .fa-sync"
+            "selector": ".patientCurrentEncounter a[data-bind=\"click: refreshEncounter\"]"
           },
           "frames": []
         }
@@ -735,7 +735,7 @@
         "target": {
           "locator": {
             "by": "css",
-            "selector": "#tabs_div .tabSpan:not(.tabsNoHover) .fa-sync"
+            "selector": ".patientCurrentEncounter a[data-bind=\"click: refreshEncounter\"]"
           },
           "frames": []
         }

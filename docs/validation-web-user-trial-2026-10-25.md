@@ -32,3 +32,9 @@ OpenEMR・OHIF Viewer・MONAIの3対象を維持する。今回はOpenEMRの手�
 実Rust APIとChromiumで比較リンクの操作、参照の開始・終了行、根拠ID、手動入力欄が空であること、事例が更新されないことを確認した。古い版、存在しない条件や根拠、同じ試行、実行した版と対応しない参照を拒否し、一部の項目だけを転記しない。既存の順序・競合・再起動・モバイル幅の試験も成功した。
 
 PR #178の修正を基準に統合し、上流とforkの比較も引き継げることを確認する。固定nginxプロキシを使う試用環境は変更しない。
+
+## 再表示の操作対象
+
+同じ版のCIで、正常な再試行のrefresh-visitが「element is not stable」でクリック前に停止する実行があった（run 40113371585）。別試行の意図したDB停止後の失敗と区別する。写真と固定版コードを確認したが、対象アイコンが不安定になった原因までは特定できていない。
+
+OpenEMRの固定コミットd7ecc612のpatient_data_template.phpにある選択中の受診リンクを使う。tabs_view_model.jsのrefreshEncounter→loadCurrentEncounter→navigateTabでencounter_top.phpを再読込し、forms.phpの表示を更新する。refresh-visitとrefresh-soapのクリック先だけをこの既存リンクへ変える。保存操作、HTTPのrequest_step、患者・受診ID、SOAP4項目の直接読取と再表示の照合は維持する。強制クリック、保存の再試行、成功条件の緩和は加えない。
