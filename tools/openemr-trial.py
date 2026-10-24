@@ -131,7 +131,7 @@ def docker(directory, manifest, *args, capture=False):
 
 
 def containers(directory, manifest):
-    raw = docker(directory, manifest, "ps", "--all", "--format", "json", capture=True).stdout.strip()
+    raw = docker(directory, manifest, "ps", "--no-trunc", "--all", "--format", "json", capture=True).stdout.strip()
     # Compose releases have emitted both arrays and one JSON object per line.
     rows = json.loads(raw) if raw.startswith("[") else [json.loads(line) for line in raw.splitlines()]
     result = {}
@@ -139,7 +139,10 @@ def containers(directory, manifest):
         if any(p.get("PublishedPort") for p in row.get("Publishers") or []):
             raise ValueError("試用コンテナに公開ポートがあります。down で停止してください")
         if row["Service"] in ["openemr-a", "openemr-b"] and row["State"] == "running":
-            result[row["Service"][-1].upper()] = row["ID"]
+            container = row.get("ID", "")
+            if not isinstance(container, str) or not re.fullmatch(r"[0-9a-f]{64}", container):
+                raise ValueError(f"Composeが完全なコンテナIDを返していません: service={row['Service']}, IDの文字数={len(str(container))}")
+            result[row["Service"][-1].upper()] = container
     return result
 
 
