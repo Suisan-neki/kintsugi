@@ -24,3 +24,9 @@ OpenEMR・OHIF Viewer・MONAIの3対象を維持する。今回はOpenEMRの手�
 実際の大学病院関係者による操作・感想の収集、問診保存の実際の改善、ソースコミットと配備イメージの同一性、実モデルの構成図・説明品質は未確認。仮想の相談と合成データによる機能検査を、実利用者の相談や改善実績として数えない。
 
 画面はデジタル庁デザインシステムの既存CSSを再利用する。390px幅の操作画面に横方向のはみ出しがないことを確認した。このホストには日本語フォントがないため、スクリーンショットによる日本語の字形の確認は未実施。
+
+## 再表示の操作対象
+
+同じ版のCIで、正常な再試行のrefresh-visitが「element is not stable」でクリック前に停止する実行があった（run 40113371585）。別試行の意図したDB停止後の失敗と区別する。写真と固定版コードを確認したが、対象アイコンが不安定になった原因までは特定できていない。
+
+OpenEMRの固定コミットd7ecc612のpatient_data_template.phpにある選択中の受診リンクを使う。tabs_view_model.jsのrefreshEncounter→loadCurrentEncounter→navigateTabでencounter_top.phpを再読込し、forms.phpの表示を更新する。refresh-visitとrefresh-soapのクリック先だけをこの既存リンクへ変える。保存操作、HTTPのrequest_step、患者・受診ID、SOAP4項目の直接読取と再表示の照合は維持する。強制クリック、保存の再試行、成功条件の緩和は加えない。
