@@ -89,6 +89,18 @@ class TrialTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "公開ポート"):
                 trial.status(self.output, manifest)
 
+    def test_compose_ids_are_requested_untruncated_and_short_ids_are_rejected(self):
+        manifest = self.prepare()
+        row = {"Service": "openemr-a", "State": "running", "Publishers": None, "ID": "a" * 64}
+        with patch.object(trial, "docker") as docker:
+            docker.return_value.stdout = json.dumps(row)
+            self.assertEqual(trial.containers(self.output, manifest), {"A": "a" * 64})
+            self.assertIn("--no-trunc", docker.call_args.args)
+            row["ID"] = "a" * 12
+            docker.return_value.stdout = json.dumps(row)
+            with self.assertRaisesRegex(ValueError, "service=openemr-a, IDの文字数=12"):
+                trial.containers(self.output, manifest)
+
     def test_ready_urls_require_owned_forwarder_and_status_does_not_erase_them(self):
         manifest = self.prepare()
         rows = [{"Service": "openemr-" + label, "ID": label * 64, "State": "running", "Publishers": None}
