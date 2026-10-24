@@ -6,7 +6,7 @@
 
 ## 環境を準備する
 
-Docker Engine 28以降とDocker Compose v2が必要。Docker公式が説明する[旧版のlocalhost公開ポートへの外部到達](https://docs.docker.com/engine/network/port-publishing/#setting-the-default-bind-address-for-containers)を避けるため、起動時にEngineの版を確認する。既存のレシピが指定する`linux/amd64`のイメージを使う。Dockerが使えなければ停止し、ホストでの直接実行へ切り替えない。
+Docker EngineとDocker Compose v2が必要。既存のレシピが指定する`linux/amd64`のイメージを使う。Dockerが使えなければ停止し、ホストでの直接実行へ切り替えない。
 
 変更前のレシピは`examples/openemr-browser/soap-recipe.json`。参照するソースはコミット`d7ecc612e166c6f9f3adc9f50bc9f8cc68cac701`、OpenEMRとMariaDBはイメージのダイジェストで固定している。
 
@@ -16,7 +16,7 @@ Docker Engine 28以降とDocker Compose v2が必要。Docker公式が説明す�
 python3 tools/openemr-trial.py prepare data/openemr-trial-001 \
   --after-recipe /path/to/reviewed-after-recipe.json
 python3 tools/openemr-trial.py up data/openemr-trial-001
-python3 tools/openemr-trial.py status data/openemr-trial-001
+python3 tools/openemr-trial.py serve data/openemr-trial-001
 ```
 
 `prepare`は未作成のディレクトリだけを受け付け、次を保存する。
@@ -31,9 +31,11 @@ python3 tools/openemr-trial.py status data/openemr-trial-001
 
 このツールは各レシピからイメージとソース参照を読み、手動試用用の構成を生成する。レシピのブラウザ自動操作・故障条件・任意の環境変数・コマンドは実行しない。レシピと同じ全条件で実行したという意味にはしない。実際の構成は`compose.json`と、そのハッシュで識別する。
 
-A・Bには別々の空のDBと内部ネットワークを作り、DBのポートはホストへ公開しない。OpenEMRだけを`127.0.0.1`の空きポートへ公開する。ホストのディレクトリをコンテナへマウントせず、既存のDBや認証情報を引き継がない。コンテナによる分離と、この設定の生成だけで、本番への影響が一切ないと証明したことにはならない。実際の分離の確認は#59で継続する。
+A・Bには別々の空のDBと内部ネットワークを作り、コンテナのポートはホストへ公開しない。`serve`がホストの`127.0.0.1`に2つの待ち受けを作る。各接続は固定コンテナIDへの`docker exec`とPHPの固定中継処理を通じて、そのコンテナ内の`127.0.0.1:443`へ転送する。TLSは復号せず、バイト列のまま転送する。通常の外部接続用ネットワークは追加しない。ホストのディレクトリをコンテナへマウントせず、既存のDBや認証情報を引き継がない。コンテナによる分離と、この設定の生成だけで、本番への影響が一切ないと証明したことにはならない。実際の分離の確認は#59で継続する。
 
-`up`が返っても、OpenEMRの初期設定が終わっていない場合がある。`status`で両方の`ready`が`true`になることを確認する。準備できない場合は、試用を開始せず、起動失敗と記録する。
+`up`はコンテナを起動する。`serve`は前景で実行し、中継経由の準備確認が両方で成功するとURLを表示する。この端末を開いたまま試用する。準備できない場合は、試用を開始せず、起動失敗と記録する。別の端末の`status`は保存済みの状態とコンテナの起動状態を読むだけで、中継の生存を新しく証明しない。
+
+中継は同時16接続、各方向64KiBのバッファ、無通信30秒、接続全体300秒を上限とする。切断後にコンテナ内のPHPが残る場合も、標準入力の終了後5秒を上限に終了する。転送処理も時間計測の条件に含め、同じ条件でA・Bを比較する。
 
 ## 利用者に試してもらう
 
@@ -49,11 +51,16 @@ Aは`127.0.0.1`、Bは`localhost`を使い、Cookieのホスト名を分ける�
 
 ## 終了と再試用
 
+`serve`を実行した端末でCtrl-Cを押す。中継の待ち受けとホスト側の子プロセスを終了し、保存した試用URLを消す。その後、次を実行する。
+
 ```bash
+python3 tools/openemr-trial.py status data/openemr-trial-001
 python3 tools/openemr-trial.py down data/openemr-trial-001
 ```
 
 この試用プロジェクトのコンテナ・ネットワーク・DBボリュームを削除し、ローカルの記録ファイルは残す。停止前に必要な検証結果と感想を麦漆へ記録する。DBの内容は削除される。共通の一括削除コマンドは使用しない。
+
+`serve.lock`がある間は、重ねて`serve`を実行したり`down`したりできない。プロセスを強制終了してロックだけが残った場合は、記載されたPIDの処理と中継が終了したことを確認してから`serve.lock`を手動で削除し、`down`する。
 
 起動の途中で失敗・中断した場合も同じ`down`を実行する。削除に失敗したときはエラーを解決して再実行する。新しい試用では別のディレクトリを準備し、初期データをもう一度そろえる。使用済みの環境で`up`を繰り返して、前の操作の影響がない試用と扱わない。
 
@@ -65,6 +72,8 @@ python3 tools/openemr-trial.py down data/openemr-trial-001
 python3 tools/openemr-trial.py prepare data/openemr-setup-check \
   --after-recipe examples/openemr-browser/soap-recipe.json --allow-identical
 python3 tools/openemr-trial.py up data/openemr-setup-check
+python3 tools/openemr-trial.py serve data/openemr-setup-check
+# URLの確認後にCtrl-Cで中継を終了する
 python3 tools/openemr-trial.py down data/openemr-setup-check
 ```
 
@@ -80,4 +89,4 @@ python3 tools/openemr-trial-smoke.py
 
 後者は同一の固定版を使う。`evaluations/openemr-manual-trial/ready.json`に起動時の参照を残し、`trial.json`に削除後の状態を残す。人の試用や、改善の効果を確認する試験ではない。
 
-構成の根拠はDocker公式の[ポート設定](https://docs.docker.com/reference/compose-file/services/#ports)、[内部ネットワーク](https://docs.docker.com/reference/compose-file/networks/#internal)、[Composeの状態出力](https://docs.docker.com/reference/cli/docker/compose/ps/)。OpenEMRの操作の根拠と既存の自動試験は[固定版レシピ](../examples/openemr-browser/README.md)に記載する。
+内部ネットワークだけのコンテナでは、Dockerが要求した公開ポートを作らないことをCIで確認したため、ポート公開に依存しない中継へ変更した。構成の根拠はDocker公式の[内部ネットワーク](https://docs.docker.com/reference/compose-file/networks/#internal)、[Composeの状態出力](https://docs.docker.com/reference/cli/docker/compose/ps/)。OpenEMRの操作の根拠と既存の自動試験は[固定版レシピ](../examples/openemr-browser/README.md)に記載する。
