@@ -24,5 +24,6 @@ pub mod server;
 pub mod system_diagram;
 pub mod trial;
 pub mod understanding;
+pub mod user_trial;
 pub mod workspace;
 mod writing;

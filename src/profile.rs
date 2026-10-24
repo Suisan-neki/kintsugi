@@ -100,7 +100,7 @@ pub fn select(workspace: &mut Workspace, domain: Domain) -> io::Result<()> {
     if workspace.profile_history.len() >= 256 {
         return Err(invalid("確認モードの履歴は256件以内です"));
     }
-    workspace.schema_version = 2;
+    workspace.schema_version = workspace.schema_version.max(2);
     workspace.profile_history.push(Selection {
         version: current(workspace).1 + 1,
         domain,

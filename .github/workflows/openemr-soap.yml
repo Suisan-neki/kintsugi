@@ -35,3 +35,23 @@ jobs:
             evaluations/ci-openemr-soap/**/*.log
           if-no-files-found: ignore
           retention-days: 7
+
+  manual-trial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check independent local trial environments and reject changed configuration
+        run: python3 tools/openemr-trial-tests.py
+      - name: Start two pinned OpenEMR instances, confirm login forms and remove trial resources
+        run: python3 tools/openemr-trial-smoke.py
+      - name: Keep environment status without credentials or Compose settings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: openemr-manual-trial
+          path: |
+            evaluations/openemr-manual-trial/ready.json
+            evaluations/openemr-manual-trial/trial.json
+          if-no-files-found: ignore
+          retention-days: 7

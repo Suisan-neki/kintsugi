@@ -250,6 +250,10 @@ pub struct Workspace {
     pub architecture_models: Vec<crate::architecture::Model>,
     #[serde(default)]
     pub architecture_links: Vec<crate::architecture::Link>,
+    #[serde(default)]
+    pub user_trial_plans: Vec<crate::user_trial::Plan>,
+    #[serde(default)]
+    pub user_trial_sessions: Vec<crate::user_trial::Session>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +346,21 @@ pub struct ChangeRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Change {
+    AddUserTrialPlan {
+        plan: crate::user_trial::PlanInput,
+    },
+    StartUserTrial {
+        plan_id: String,
+        participant: String,
+        order: [crate::user_trial::Label; 2],
+    },
+    RecordUserTrialFeedback {
+        session_id: String,
+        variant: crate::user_trial::Label,
+        outcome: crate::user_trial::Outcome,
+        operation: String,
+        feedback: String,
+    },
     SelectProfile {
         domain: crate::profile::Domain,
     },
@@ -524,7 +543,7 @@ fn validate_check(check: &Check) -> io::Result<()> {
 }
 
 pub fn validate(workspace: &Workspace) -> io::Result<()> {
-    if !matches!(workspace.schema_version, 1 | 2) || workspace.revision == 0 {
+    if !matches!(workspace.schema_version, 1..=3) || workspace.revision == 0 {
         return Err(invalid("未対応の事例形式です"));
     }
     identifier(&workspace.id)?;
@@ -535,6 +554,7 @@ pub fn validate(workspace: &Workspace) -> io::Result<()> {
     unique(workspace.decisions.iter().map(|d| d.id.as_str()))?;
     crate::architecture::validate(workspace)?;
     crate::profile::validate(workspace)?;
+    crate::user_trial::validate(workspace)?;
     for s in &workspace.statements {
         nonempty(&s.text, "記録")?;
         nonempty(&s.origin, "出所")?;
@@ -623,6 +643,8 @@ pub fn empty_workspace(id: String, title: String) -> Workspace {
         history: vec![],
         architecture_models: vec![],
         architecture_links: vec![],
+        user_trial_plans: vec![],
+        user_trial_sessions: vec![],
     }
 }
 
@@ -684,6 +706,8 @@ pub fn initialize(
         || !workspace.decisions.is_empty()
         || !workspace.history.is_empty()
         || !workspace.profile_history.is_empty()
+        || !workspace.user_trial_plans.is_empty()
+        || !workspace.user_trial_sessions.is_empty()
     {
         return Err(invalid("新しい事例へ既存の根拠・判断履歴は混入できません"));
     }
@@ -1118,6 +1142,36 @@ pub fn change(directory: &Path, request: ChangeRequest) -> io::Result<WorkspaceV
             .ok_or_else(|| invalid("確認事項がありません"))
     };
     let operation = match request.action {
+        Change::AddUserTrialPlan { plan } => {
+            crate::user_trial::add_plan(&mut workspace, plan, &request.actor)?;
+            "add_user_trial_plan"
+        }
+        Change::StartUserTrial {
+            plan_id,
+            participant,
+            order,
+        } => {
+            crate::user_trial::start(&mut workspace, plan_id, participant, order, &request.actor)?;
+            "start_user_trial"
+        }
+        Change::RecordUserTrialFeedback {
+            session_id,
+            variant,
+            outcome,
+            operation,
+            feedback,
+        } => {
+            crate::user_trial::record_feedback(
+                &mut workspace,
+                &session_id,
+                variant,
+                outcome,
+                operation,
+                feedback,
+                &request.actor,
+            )?;
+            "record_user_trial_feedback"
+        }
         Change::SelectProfile { domain } => {
             crate::profile::select(&mut workspace, domain)?;
             "select_profile"

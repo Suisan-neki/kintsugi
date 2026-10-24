@@ -256,7 +256,7 @@ fn handle_connection_mode(
     // 画面の復元用クエリはブラウザが読む。APIの経路は曖昧にしない。
     if request.method == "GET"
         && let Some((path, _)) = request.path.split_once('?')
-        && matches!(path, "/" | "/architecture" | "/workbench")
+        && matches!(path, "/" | "/architecture" | "/workbench" | "/user-trial")
     {
         request.path = path.to_owned();
     }
@@ -351,6 +351,15 @@ fn handle_connection_mode(
             }
             ("GET", "/workbench") => {
                 return html_response(stream, &workbench_html(token));
+            }
+            ("GET", "/user-trial") => {
+                return html_response(
+                    stream,
+                    &styled_app(include_str!("../ui/web-trial.html"), token),
+                );
+            }
+            ("GET", "/ui/web-trial.js") => {
+                return script_response(stream, include_str!("../ui/web-trial.js"));
             }
             ("GET", "/ui/workbench.js") => {
                 return script_response(stream, include_str!("../ui/workbench.js"));
