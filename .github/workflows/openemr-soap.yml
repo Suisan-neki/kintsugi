@@ -53,5 +53,6 @@ jobs:
           path: |
             evaluations/openemr-manual-trial/ready.json
             evaluations/openemr-manual-trial/trial.json
+            evaluations/openemr-manual-trial/boundaries.json
           if-no-files-found: ignore
           retention-days: 7

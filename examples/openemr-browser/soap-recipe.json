@@ -267,13 +267,20 @@
       },
       {
         "id": "registration-later",
-        "action": "click",
+        "action": "dismiss",
         "target": {
           "locator": {
             "by": "css",
             "selector": ".product-registration-modal .nothanks"
           },
           "frames": []
+        },
+        "content": {
+          "frames": [],
+          "locator": {
+            "by": "css",
+            "selector": ".product-registration-modal"
+          }
         }
       },
       {

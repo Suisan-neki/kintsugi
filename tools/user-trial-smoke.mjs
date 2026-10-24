@@ -80,6 +80,7 @@ try {
   assert.equal(await page.locator('#operation').inputValue(), '合成の操作記録');
   await page.getByRole('button', { name: '最新の記録を読み直す', exact: true }).click();
   await page.getByText('最新の記録を読み込みました。', { exact: true }).waitFor();
+  await page.locator('#session-body').getByText('この試用を始めた後に、現在の検証条件が変わっています。', { exact: false }).waitFor();
   assert.equal(await page.locator('#feedback').inputValue(), '<img src=x onerror="window.pwned=1">');
   assert.equal(await page.locator('#outcome').inputValue(), 'blocked');
   await page.getByRole('button', { name: 'Bの感想を保存する', exact: true }).click();
@@ -98,6 +99,11 @@ try {
   assert.equal(v.workspace.user_trial_sessions[0].feedback[1].outcome, 'not_tried');
   assert.equal(v.verification_passed, false);
   assert.equal(v.workspace.decisions.length, 0);
+  await page.getByRole('button', { name: '試す内容の一覧に戻る', exact: true }).click();
+  await page.locator('#plans').getByText('この計画の作成後に、検証する条件が変わっています。', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'この内容を試す', exact: true }).count(), 0, '条件変更済み計画から新しい試用を開始できてしまう');
+  await page.getByRole('button', { name: '記録を見る', exact: true }).click();
+  await page.getByText('A・Bの記録を保存しました。', { exact: false }).waitFor();
   assert.equal((await page.request.get(url + '/api/v1/case')).status(), 403);
   const id = session.id;
   await stop(); url = await start();
@@ -176,20 +182,20 @@ try {
     for (const id of ['concern', 'a-commit', 'b-commit', 'a-evidence', 'b-evidence']) assert.equal(await page.locator('#' + id).inputValue(), '', 'invalid handoff must not partially prefill');
   }
   assert.equal((await get()).workspace.revision, beforeHandoff.workspace.revision);
-  const mismatchedSource = { ...source('b'), repository: 'different/repository' };
-  await apply({ op: 'bind_source', check_id: checkId, source: mismatchedSource });
+  const forkSource = { ...source('b'), repository: 'different/repository' };
+  await apply({ op: 'bind_source', check_id: checkId, source: forkSource });
   v = await get();
-  const mismatchedCheck = v.workspace.checks.find(c => c.id === checkId);
-  const correlation = { run_id: 'handoff-mismatch', record_id: 'synthetic-record', attempt_id: 'mismatch' };
-  await apply({ op: 'import_reported', condition: { id: checkId, version: mismatchedCheck.version, text: mismatchedCheck.text, origin: mismatchedCheck.origin, kind: 'custom' }, trace: { schema_version: 1, correlation, producer: '合成の別リポジトリ', origin: '不正な引継ぎの検査用', completed: true, source: mismatchedSource, context: {}, observations: [] } });
+  const forkCheck = v.workspace.checks.find(c => c.id === checkId);
+  const correlation = { run_id: 'handoff-fork', record_id: 'synthetic-record', attempt_id: 'fork' };
+  await apply({ op: 'import_reported', condition: { id: checkId, version: forkCheck.version, text: forkCheck.text, origin: forkCheck.origin, kind: 'custom' }, trace: { schema_version: 1, correlation, producer: '合成の別リポジトリ', origin: 'forkの引継ぎの検査用', completed: true, source: forkSource, context: {}, observations: [] } });
   v = await get();
-  const mismatchedQuery = new URL(href, url);
-  mismatchedQuery.searchParams.set('revision', v.workspace.revision);
-  mismatchedQuery.searchParams.set('after', v.workspace.evidence.at(-1).id);
-  await page.goto(mismatchedQuery.href);
-  await page.locator('#alert .box').waitFor();
-  assert.equal(await page.locator('#concern').inputValue(), '');
-  assert.equal(await page.locator('#b-repository').inputValue(), '');
+  const forkQuery = new URL(href, url);
+  forkQuery.searchParams.set('revision', v.workspace.revision);
+  forkQuery.searchParams.set('after', v.workspace.evidence.at(-1).id);
+  await page.goto(forkQuery.href);
+  await page.locator('#handoff-notice:not([hidden])').waitFor();
+  assert.equal(await page.locator('#b-repository').inputValue(), 'different/repository');
+  assert.equal(await page.locator('#b-commit').inputValue(), 'b'.repeat(40));
   assert.equal((await get()).workspace.revision, v.workspace.revision);
   const validQuery = new URL(href, url); validQuery.searchParams.set('revision', v.workspace.revision);
   await page.goto(validQuery.href);
@@ -203,5 +209,5 @@ try {
   await page.reload();
   await page.getByText('A・Bの記録を保存しました。', { exact: false }).waitFor();
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ checks: ['plan form without diagram', 'B then A operation and feedback', 'links carry no review token and disown opener', 'no feedback from opening link', 'conflict preserves draft after refresh', 'concurrent advance never moves A draft into B', 'escaped feedback', 'session reload and restart persistence', 'not tried stays separate', 'no QA verdict or adoption change', 'API authentication', 'comparison-to-trial draft without writes', 'source range retained', 'stale or mismatched handoff rejected without partial prefill'], oss_execution: 'not_run', actual_user_trial: 'not_conducted' }));
+  console.log(JSON.stringify({ checks: ['plan form without diagram', 'B then A operation and feedback', 'links carry no review token and disown opener', 'no feedback from opening link', 'conflict preserves draft after refresh', 'concurrent advance never moves A draft into B', 'obsolete plan cannot start a new session; historical session feedback remains bound to old conditions', 'escaped feedback', 'session reload and restart persistence', 'not tried stays separate', 'no QA verdict or adoption change', 'API authentication', 'comparison-to-trial draft without writes', 'source range retained', 'stale or mismatched handoff rejected without partial prefill', 'fork source retained'], oss_execution: 'not_run', actual_user_trial: 'not_conducted' }));
 } finally { await stop(); await browser?.close(); await rm(temporary, { recursive: true, force: true }); }

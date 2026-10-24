@@ -1,8 +1,6 @@
 """Prepare and manage two disposable, local OpenEMR environments for human trials."""
 import argparse
-import contextlib
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,14 +10,34 @@ import ssl
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.request
 
 
 DEFAULT_RECIPE = Path(__file__).resolve().parents[1] / "examples/openemr-browser/soap-recipe.json"
-forward_spec = importlib.util.spec_from_file_location("openemr_forward", Path(__file__).with_name("openemr-forward.py"))
-forward = importlib.util.module_from_spec(forward_spec)
-forward_spec.loader.exec_module(forward)
+INGRESS_IMAGE = "nginx:1.27.4-alpine@sha256:4ff102c5d78d254a6f0da062b3cf39eaf07f01eec0927fd21e219d0af8bc0591"
+
+
+def ingress_command(label):
+    # These two labels and the TLS upstream are fixed by this tool, not input
+    # from the repository, request, browser or an environment variable.
+    if label not in {"a", "b"}:
+        raise ValueError("試用環境の識別子が不正です")
+    return """cat > /tmp/nginx.conf <<'NGINX'
+worker_processes 1;
+pid /tmp/nginx.pid;
+error_log stderr warn;
+events { worker_connections 128; }
+stream {
+    server {
+        listen 8443;
+        proxy_connect_timeout 5s;
+        proxy_timeout 120s;
+        proxy_pass openemr-""" + label + """:443;
+    }
+}
+NGINX
+exec nginx -e stderr -c /tmp/nginx.conf -g 'daemon off;'
+"""
 
 
 def write_json(path, value):
@@ -63,8 +81,6 @@ def recipe(path):
 def prepare(directory, before_path, after_path, allow_identical=False):
     inputs = [recipe(before_path), recipe(after_path)]
     sources = [value["source"] for value, _ in inputs]
-    if sources[0]["repository"] != sources[1]["repository"]:
-        raise ValueError("A・Bは同じリポジトリのコミットを指定してください。フォークを使う場合は両方を同じフォークで参照してください")
     apps = [next(s for s in r[0]["containers"]["services"] if s["name"] == "openemr") for r in inputs]
     identical = apps[0]["image"].split("@")[-1] == apps[1]["image"].split("@")[-1]
     if identical and not allow_identical:
@@ -79,6 +95,7 @@ def prepare(directory, before_path, after_path, allow_identical=False):
     variants = []
     for label, (value, digest) in zip(["a", "b"], inputs):
         compose["networks"][label] = {"internal": True}
+        compose["networks"]["ingress-" + label] = {"driver": "bridge", "internal": False}
         compose["volumes"]["db-" + label] = {}
         database = next(s for s in value["containers"]["services"] if s["name"] == "mysql")
         app = next(s for s in value["containers"]["services"] if s["name"] == "openemr")
@@ -99,14 +116,25 @@ def prepare(directory, before_path, after_path, allow_identical=False):
                             "MYSQL_USER": "openemr", "MYSQL_PASS": db_password,
                             "OE_USER": credentials["username"], "OE_PASS": credentials["password"]},
         }
+        # Docker may omit published ports on internal-only bridges. Only a
+        # fixed TCP ingress gets an additional bridge; app and DB stay internal.
+        compose["services"]["proxy-" + label] = {
+            "image": INGRESS_IMAGE, "platform": "linux/amd64", "restart": "no",
+            "networks": [label, "ingress-" + label],
+            "ports": [{"target": 8443, "published": "0", "host_ip": "127.0.0.1", "protocol": "tcp"}],
+            "depends_on": {"openemr-" + label: {"condition": "service_started"}},
+            "user": "101:101", "read_only": True, "cap_drop": ["ALL"],
+            "security_opt": ["no-new-privileges:true"], "pids_limit": 64,
+            "tmpfs": ["/tmp:rw,noexec,nosuid,nodev,size=1048576,mode=1777"],
+            "entrypoint": ["/bin/sh", "-ec"], "command": [ingress_command(label)],
+        }
         variants.append({"label": label.upper(), "source": value["source"], "recipe_sha256": digest,
-                         "app_image": app["image"], "database_image": database["image"], "url": None})
+                         "app_image": app["image"], "database_image": database["image"],
+                         "ingress_image": INGRESS_IMAGE, "url": None})
     write_json(directory / "compose.json", compose)
     manifest = {"schema_version": 1, "project": project, "state": "prepared", "variants": variants,
                 "identical_images": identical, "human_evaluation": "not_conducted",
                 "source_image_correspondence": "declared_not_verified",
-                "transport": "loopback_tcp_to_docker_exec_php",
-                "relay_sha256": hashlib.sha256(Path(forward.__file__).read_bytes()).hexdigest(),
                 "data": "Fresh separate databases; enter synthetic data manually in both environments.",
                 "compose_sha256": hashlib.sha256((directory / "compose.json").read_bytes()).hexdigest()}
     write_json(directory / "credentials.json", credentials)
@@ -130,36 +158,38 @@ def docker(directory, manifest, *args, capture=False):
     return subprocess.run(command, check=True, text=True, stdout=subprocess.PIPE if capture else None)
 
 
-def containers(directory, manifest):
-    raw = docker(directory, manifest, "ps", "--no-trunc", "--all", "--format", "json", capture=True).stdout.strip()
+def check_engine():
+    version = subprocess.check_output(["docker", "version", "--format", "{{.Server.Version}}"], text=True).strip()
+    if not re.match(r"\d+\.", version) or int(version.split(".")[0]) < 28:
+        raise ValueError("この試用環境は、localhost 公開ポートの修正を含む Docker Engine 28 以降が必要です")
+
+
+def status(directory, manifest):
+    raw = docker(directory, manifest, "ps", "--all", "--format", "json", capture=True).stdout.strip()
     # Compose releases have emitted both arrays and one JSON object per line.
     rows = json.loads(raw) if raw.startswith("[") else [json.loads(line) for line in raw.splitlines()]
-    result = {}
-    for row in rows:
-        if any(p.get("PublishedPort") for p in row.get("Publishers") or []):
-            raise ValueError("試用コンテナに公開ポートがあります。down で停止してください")
-        if row["Service"] in ["openemr-a", "openemr-b"] and row["State"] == "running":
-            container = row.get("ID", "")
-            if not isinstance(container, str) or not re.fullmatch(r"[0-9a-f]{64}", container):
-                raise ValueError(f"Composeが完全なコンテナIDを返していません: service={row['Service']}, IDの文字数={len(str(container))}")
-            result[row["Service"][-1].upper()] = container
-    return result
-
-
-def status(directory, manifest, pair=None):
-    running = containers(directory, manifest)
-    if pair is None:
-        return {**manifest, "containers_running": sorted(running), "relay_status": "last_recorded_not_live_probe"}
     for variant in manifest["variants"]:
-        variant["ready"] = False
-        label = variant["label"]
-        if pair.containers.get(label) != running.get(label):
-            # A stored URL is valid only while this serve process owns its listener.
-            variant["url"] = None
+        variant.update(url=None, ready=False)
+        name = "proxy-" + variant["label"].lower()
+        service = next((s for s in rows if s["Service"] == name), None)
+        # Do not print raw ps/inspect output: it can contain commands or secrets.
+        publishers = (service or {}).get("Publishers") or []
+        diagnostic = {"service": name, "state": (service or {}).get("State", "absent"),
+                      "publishers": [{key: publisher.get(key) for key in ["URL", "TargetPort", "PublishedPort", "Protocol"]}
+                                     for publisher in publishers]}
+        variant["ingress"] = diagnostic
+        if not service or service["State"] != "running":
             continue
-        base = "https://127.0.0.1:" + str(pair.port(label))
+        bindings = [p for p in publishers if p.get("PublishedPort")]
+        if (len(bindings) != 1 or bindings[0].get("TargetPort") != 8443
+                or bindings[0].get("URL") != "127.0.0.1" or bindings[0].get("Protocol", "tcp") != "tcp"
+                or not isinstance(bindings[0]["PublishedPort"], int)
+                or not 1 <= bindings[0]["PublishedPort"] <= 65535):
+            raise ValueError("試用プロキシの8443番ポートが 127.0.0.1 に公開されていません。down で停止してください。"
+                             + json.dumps(diagnostic, ensure_ascii=False))
+        base = "https://127.0.0.1:" + str(bindings[0]["PublishedPort"])
         host = "127.0.0.1" if variant["label"] == "A" else "localhost"
-        variant["url"] = f"https://{host}:{pair.port(label)}/interface/login/login.php"
+        variant["url"] = f"https://{host}:{bindings[0]['PublishedPort']}/interface/login/login.php"
         try:
             # The fixed local image uses a self-signed certificate. No remote URL is accepted.
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
@@ -169,21 +199,12 @@ def status(directory, manifest, pair=None):
                 variant["ready"] = response.status == 200
         except OSError:
             pass
-    manifest["state"] = "ready" if all(v["ready"] for v in manifest["variants"]) else "serving"
+    # Inspecting an environment before its first start must not consume the
+    # prepared state. A successfully removed environment must stay removed.
+    if rows or manifest["state"] not in {"prepared", "removed"}:
+        manifest["state"] = "ready" if all(v["ready"] for v in manifest["variants"]) else "not_ready"
     write_json(directory / "trial.json", manifest)
     return manifest
-
-
-@contextlib.contextmanager
-def serve_lock(directory):
-    path = directory / "serve.lock"
-    with path.open("x") as lock:
-        try:
-            lock.write(str(os.getpid()) + "\n")
-            lock.flush()
-            yield
-        finally:
-            path.unlink()
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -193,7 +214,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["prepare", "up", "serve", "status", "down"])
+    parser.add_argument("command", choices=["prepare", "up", "status", "down"])
     parser.add_argument("directory", type=Path)
     parser.add_argument("--before-recipe", type=Path, default=DEFAULT_RECIPE)
     parser.add_argument("--after-recipe", type=Path)
@@ -213,40 +234,17 @@ def main():
                 manifest["state"] = "starting"
                 write_json(directory / "trial.json", manifest)
                 try:
+                    check_engine()
                     docker(directory, manifest, "up", "-d", "--wait", "--wait-timeout", "300")
                 except (OSError, ValueError, subprocess.SubprocessError):
                     manifest["state"] = "start_failed"
                     write_json(directory / "trial.json", manifest)
                     print("起動に失敗しました。down で、この試用環境の残った資源を削除してください。", file=sys.stderr)
                     raise
-                manifest["state"] = "started"
-                write_json(directory / "trial.json", manifest)
                 manifest = status(directory, manifest)
-            elif args.command == "serve":
-                with serve_lock(directory):
-                    try:
-                        with forward.ForwardPair(containers(directory, manifest)) as pair:
-                            deadline = time.monotonic() + 240
-                            while status(directory, manifest, pair)["state"] != "ready":
-                                if time.monotonic() >= deadline:
-                                    raise ValueError("OpenEMRの準備が完了しません。試用を開始せず、down で停止してください")
-                                time.sleep(2)
-                            print(json.dumps(manifest, ensure_ascii=False, indent=2), flush=True)
-                            print("試用中です。終了時は Ctrl-C を押し、down でコンテナとDBを削除してください。", file=sys.stderr)
-                            while True:
-                                time.sleep(1)
-                    except KeyboardInterrupt:
-                        pass
-                    finally:
-                        manifest["state"] = "relay_stopped"
-                        for variant in manifest["variants"]:
-                            variant.update(url=None, ready=False)
-                        write_json(directory / "trial.json", manifest)
             elif args.command == "status":
                 manifest = status(directory, manifest)
             else:
-                if (directory / "serve.lock").exists():
-                    raise ValueError("先に serve を Ctrl-C で終了してください。終了後に down を実行してください")
                 docker(directory, manifest, "down", "--volumes", "--remove-orphans")
                 manifest["state"] = "removed"
                 for variant in manifest["variants"]:

@@ -32,6 +32,19 @@ fn validate_trial_history(previous: &Workspace, current: &Workspace) -> io::Resu
     {
         return Err(invalid("以前の試用計画・試用記録が書き換えられています"));
     }
+    if current.user_trial_plans[plans..]
+        .iter()
+        .any(|plan| plan.created_revision != current.revision)
+        || current.user_trial_sessions[previous.user_trial_sessions.len()..]
+            .iter()
+            .any(|session| {
+                session.started_revision != current.revision || !session.feedback.is_empty()
+            })
+    {
+        return Err(invalid(
+            "試用計画・開始記録の版が最初に追加された版と一致しません",
+        ));
+    }
     for (old, new) in previous
         .user_trial_sessions
         .iter()
@@ -46,6 +59,13 @@ fn validate_trial_history(previous: &Workspace, current: &Workspace) -> io::Resu
             return Err(invalid(
                 "以前の試用者・操作順序・感想が書き換えられています",
             ));
+        }
+        if new.feedback.len() > old.feedback.len() + 1
+            || new.feedback[old.feedback.len()..]
+                .iter()
+                .any(|feedback| feedback.recorded_revision != current.revision)
+        {
+            return Err(invalid("感想の記録版が最初に追加された版と一致しません"));
         }
     }
     Ok(())

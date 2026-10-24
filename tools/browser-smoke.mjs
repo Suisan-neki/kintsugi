@@ -15,6 +15,21 @@ const server=createServer(async(req,res)=>{requests.push(req.url);
  if(req.url==='/save'){let body='';for await(const chunk of req)body+=chunk;if(database)stored=body;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({message:'保存しました'}));return;}
  if(req.url==='/frame'){res.setHeader('Content-Type','multipart/related; boundary=eel');res.end(Buffer.concat([Buffer.from('--eel\r\nContent-Type: application/octet-stream\r\n\r\n'),Buffer.from([0,1,2,255]),Buffer.from('\r\n--eel--\r\n')]));return;}
  if(req.url==='/stored'){res.end(stored);return;}
+ if(req.url==='/dismiss'||req.url==='/dismiss-stuck'){
+  const stuck=req.url==='/dismiss-stuck';
+  res.setHeader('Content-Type','text/html; charset=utf-8');
+  // 最初のクリックが表示遷移中に届いて無視される場合を明示的に作る。
+  // 2回目で実際に案内を閉じるか、閉じられない状態を維持する。
+  res.end(`<!doctype html><html><div id="notice" role="dialog" style="position:fixed;inset:0;background:white;z-index:10"><button id="dismiss">後で</button></div><p id="attempts"></p><button id="proceed">次の操作</button><p id="result"></p><script>
+   let attempts=0,transitionFinished=false;
+   document.querySelector('#dismiss').onclick=()=>{
+    attempts++;document.querySelector('#attempts').textContent=String(attempts);
+    if(attempts===1){setTimeout(()=>transitionFinished=true,100);return;}
+    if(transitionFinished&&!${stuck})document.querySelector('#notice').hidden=true;
+   };
+   document.querySelector('#proceed').onclick=async()=>{await fetch('/save',{method:'POST',body:'dismissed'});document.querySelector('#result').textContent='次の操作を完了した';};
+  </script></html>`);return;
+ }
  if(req.url!=='/'){res.writeHead(404);res.end();return;}
  res.setHeader('Content-Type','text/html; charset=utf-8');res.end(`<!doctype html><html lang="ja"><label>利用者<input id="user"></label><label>パスワード<input type="password" id="password"></label><button id="login" onclick="document.querySelector('#ready').hidden=false">ログイン</button><p id="ready" hidden>準備完了</p><button id="expand" onclick="document.querySelector('#note').hidden=!document.querySelector('#note').hidden">詳細</button><div id="note" hidden>表示する説明</div><label>試験値<input id="value"></label><button id="save">保存</button><p id="result"></p><canvas id="pixels" width="64" height="64"></canvas><div style="position:relative;display:inline-block"><canvas id="blank" width="64" height="64"></canvas><div style="position:absolute;inset:0;background:linear-gradient(black,white)">合成の重なり</div></div><script>const c=document.querySelector("#pixels").getContext("2d");const gradient=c.createLinearGradient(0,0,64,64);gradient.addColorStop(0,"black");gradient.addColorStop(1,"white");c.fillStyle=gradient;c.fillRect(0,0,64,64);document.querySelector('#save').onclick=async()=>{const r=await fetch('/save',{method:'POST',body:document.querySelector('#value').value});const body=await r.json();const node=document.querySelector('#result');node.textContent=body.message;node.dataset.done='true';fetch('/frame');fetch('http://external.invalid/blocked').catch(()=>{});};</script></html>`);
 });
@@ -50,5 +65,10 @@ try {
  requests=[];const secretFailure=await run('missing-secret',{...spec,preparation:[{id:'password',action:'fill',target:css('#does-not-exist'),value:{source:'secret',key:'password'}}]},false,5000);
  assert.equal(secretFailure.prepared,false);assert.equal(secretFailure.steps.at(-1).completed,false);assert.equal(secretFailure.steps.at(-1).screenshot,null);
  requests=[];const wrongVersion=await run('wrong-version',{...spec,expected_version:'0.0.0'});assert.equal(wrongVersion.prepared,false);assert.equal(wrongVersion.completed,false);assert.equal(wrongVersion.steps.length,0);
- console.log(JSON.stringify({version,checks:['preparation precedes fault','successful display with absent stored data','action HTTP attribution','secrets redacted','external request blocked','partial step retained','failure photo after action deadline','preparation failure does not start actions','secret fill failure has no photo','version mismatch rejected','canvas pixels exclude a gradient HTML overlay']}));
+ const dismissStep={id:'dismiss-notice',action:'dismiss',target:css('#dismiss'),content:css('#notice')};
+ const dismissSpec={...spec,start_path:'/dismiss',preparation:[dismissStep,{id:'dismiss-attempts',action:'read_text',target:css('#attempts'),contains:'2'}],actions:[{id:'proceed',action:'click',target:css('#proceed')},{id:'proceeded',action:'read_text',target:css('#result'),contains:'次の操作を完了した'}],responses:[]};
+ requests=[];const dismissed=await run('dismiss-transition',dismissSpec);assert.equal(dismissed.prepared,true,JSON.stringify(dismissed));assert.equal(dismissed.completed,true);assert.match(dismissed.steps[0].detail,/クリックを2回実行した.*非表示を確認した/);assert.equal(dismissed.steps[1].text,'2');assert.equal(requests.filter(p=>p==='/save').length,1);
+ requests=[];const stuck=await run('dismiss-stuck',{...dismissSpec,start_path:'/dismiss-stuck'});assert.equal(stuck.prepared,false);assert.equal(stuck.completed,false);assert.equal(stuck.steps.length,1);assert.match(stuck.steps[0].detail,/クリックを3回実行した/);assert(!stuck.steps[0].detail.includes('非表示を確認した'));assert.equal(stuck.steps[0].screenshot,'browser/preparation-dismiss-notice.png');assert.equal(requests.filter(p=>p==='/save').length,0);
+ requests=[];const unauthorized=await run('dismiss-action',{...dismissSpec,preparation:[],actions:[dismissStep]});assert.equal(unauthorized.completed,false);assert.match(unauthorized.steps[0].detail,/準備中だけ/);assert.equal(requests.filter(p=>p==='/save').length,0);
+ console.log(JSON.stringify({version,checks:['preparation precedes fault','successful display with absent stored data','action HTTP attribution','secrets redacted','external request blocked','partial step retained','failure photo after action deadline','preparation failure does not start actions','secret fill failure has no photo','version mismatch rejected','canvas pixels exclude a gradient HTML overlay','dismissal confirms hidden after opening transition','only dismissal retries at most three times','failed dismissal prevents target actions','dismissal rejected outside preparation']}));
 } finally {for(const child of live)child.kill('SIGKILL');await new Promise(r=>server.close(r));await rm(temp,{recursive:true,force:true});}
