@@ -189,6 +189,33 @@ fn validates_the_pinned_openemr_recipe_without_running_it() {
 }
 
 #[test]
+fn dismissal_is_preparation_only_and_validates_both_targets() {
+    let dismissal = json!({
+        "id":"dismiss-notice", "action":"dismiss",
+        "target":{"locator":{"by":"css","selector":"#notice button"}},
+        "content":{"locator":{"by":"css","selector":"#notice"}}
+    });
+    let mut valid = spec();
+    valid
+        .preparation
+        .push(serde_json::from_value(dismissal.clone()).unwrap());
+    validate(&valid, &containers()).unwrap();
+
+    let mut action_only = spec();
+    action_only
+        .actions
+        .push(serde_json::from_value(dismissal.clone()).unwrap());
+    assert!(validate(&action_only, &containers()).is_err());
+
+    let mut invalid = dismissal;
+    invalid["content"]["locator"]["selector"] = json!("");
+    let mut bad = spec();
+    bad.preparation
+        .push(serde_json::from_value(invalid).unwrap());
+    assert!(validate(&bad, &containers()).is_err());
+}
+
+#[test]
 fn unknown_response_body_never_passes_negative_body_check_and_expressions_are_validated() {
     let mut p = phase();
     p.browser.as_mut().unwrap().responses.push(ResponseRecord {

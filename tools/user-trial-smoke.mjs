@@ -76,6 +76,7 @@ try {
   assert.equal(await page.locator('#operation').inputValue(), '合成の操作記録');
   await page.getByRole('button', { name: '最新の記録を読み直す', exact: true }).click();
   await page.getByText('最新の記録を読み込みました。', { exact: true }).waitFor();
+  await page.locator('#session-body').getByText('この試用を始めた後に、現在の検証条件が変わっています。', { exact: false }).waitFor();
   assert.equal(await page.locator('#feedback').inputValue(), '<img src=x onerror="window.pwned=1">');
   assert.equal(await page.locator('#outcome').inputValue(), 'blocked');
   await page.getByRole('button', { name: 'Bの感想を保存する', exact: true }).click();
@@ -94,6 +95,11 @@ try {
   assert.equal(v.workspace.user_trial_sessions[0].feedback[1].outcome, 'not_tried');
   assert.equal(v.verification_passed, false);
   assert.equal(v.workspace.decisions.length, 0);
+  await page.getByRole('button', { name: '試す内容の一覧に戻る', exact: true }).click();
+  await page.locator('#plans').getByText('この計画の作成後に、検証する条件が変わっています。', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'この内容を試す', exact: true }).count(), 0, '条件変更済み計画から新しい試用を開始できてしまう');
+  await page.getByRole('button', { name: '記録を見る', exact: true }).click();
+  await page.getByText('A・Bの記録を保存しました。', { exact: false }).waitFor();
   assert.equal((await page.request.get(url + '/api/v1/case')).status(), 403);
   const id = session.id;
   await stop(); url = await start();
@@ -133,5 +139,5 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'mobile page must not overflow horizontally');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ checks: ['plan form without diagram', 'B then A operation and feedback', 'links carry no review token and disown opener', 'no feedback from opening link', 'conflict preserves draft after refresh', 'concurrent advance never moves A draft into B', 'escaped feedback', 'session reload and restart persistence', 'not tried stays separate', 'no QA verdict or adoption change', 'API authentication'], oss_execution: 'not_run', actual_user_trial: 'not_conducted' }));
+  console.log(JSON.stringify({ checks: ['plan form without diagram', 'B then A operation and feedback', 'links carry no review token and disown opener', 'no feedback from opening link', 'conflict preserves draft after refresh', 'concurrent advance never moves A draft into B', 'obsolete plan cannot start a new session; historical session feedback remains bound to old conditions', 'escaped feedback', 'session reload and restart persistence', 'not tried stays separate', 'no QA verdict or adoption change', 'API authentication'], oss_execution: 'not_run', actual_user_trial: 'not_conducted' }));
 } finally { await stop(); await browser?.close(); await rm(temporary, { recursive: true, force: true }); }

@@ -114,7 +114,7 @@ fn unique_ids<'a>(values: impl Iterator<Item = &'a str>) -> io::Result<()> {
     }
     Ok(())
 }
-fn validate_url(value: &str) -> io::Result<()> {
+fn validate_url(value: &str) -> io::Result<url::Url> {
     let u = url::Url::parse(value).map_err(|_| invalid("試用先のURLを確認してください"))?;
     let loopback = match u.host() {
         Some(url::Host::Domain(host)) => host == "localhost",
@@ -134,7 +134,7 @@ fn validate_url(value: &str) -> io::Result<()> {
             "試用先は認証情報・クエリー・フラグメントを含まないlocalhostまたはループバックIPのHTTP(S) URLにしてください",
         ));
     }
-    Ok(())
+    Ok(u)
 }
 fn check_versions(workspace: &Workspace) -> BTreeMap<String, u32> {
     workspace
@@ -166,14 +166,12 @@ fn validate_plan(workspace: &Workspace, plan: &Plan) -> io::Result<()> {
     {
         return Err(invalid("試用計画の版とA・Bの定義を確認してください"));
     }
-    if plan.variants[0].source.repository != plan.variants[1].source.repository
-        || plan.variants[0].source.commit == plan.variants[1].source.commit
-    {
+    if plan.variants[0].source.commit == plan.variants[1].source.commit {
         return Err(invalid(
-            "比較するOSSは同じリポジトリの異なる固定コミットを指定してください",
+            "比較するOSSには異なる固定コミットを指定してください。forkの変更版も登録できます",
         ));
     }
-    if plan.variants[0].url == plan.variants[1].url {
+    if validate_url(&plan.variants[0].url)? == validate_url(&plan.variants[1].url)? {
         return Err(invalid("A・Bには別々の試用先URLが必要です"));
     }
     for variant in &plan.variants {
@@ -188,6 +186,13 @@ fn validate_plan(workspace: &Workspace, plan: &Plan) -> io::Result<()> {
                 .ok_or_else(|| invalid("試用計画が参照する検証結果がありません"))?;
             if !evidence.source.as_ref().is_some_and(|s| {
                 s.repository == variant.source.repository && s.commit == variant.source.commit
+            }) || evidence.execution.as_ref().is_some_and(|trace| {
+                trace.recipe.source.repository != variant.source.repository
+                    || trace.recipe.source.commit != variant.source.commit
+            }) || evidence.reported.as_ref().is_some_and(|trace| {
+                !trace.source.as_ref().is_some_and(|s| {
+                    s.repository == variant.source.repository && s.commit == variant.source.commit
+                })
             }) {
                 return Err(invalid(
                     "試用する版と検証結果のリポジトリ・コミットが一致しません",

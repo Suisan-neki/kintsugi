@@ -48,6 +48,11 @@ pub enum Action {
         target: Target,
         content: Target,
     },
+    /// 準備用の案内を閉じ、非表示を確認する。通常のクリック操作は再試行しない。
+    Dismiss {
+        target: Target,
+        content: Target,
+    },
     Select {
         target: Target,
         value: String,
@@ -244,6 +249,11 @@ pub fn validate(spec: &BrowserSpec, containers: &ContainerSpec) -> io::Result<()
             }
             Action::Click { target: t } => target(t),
             Action::Expand { target: t, content } => target(t) && target(content),
+            Action::Dismiss { target: t, content } => {
+                target(t)
+                    && target(content)
+                    && spec.preparation.iter().any(|prepared| prepared.id == s.id)
+            }
             Action::ReadText {
                 target: t,
                 contains,

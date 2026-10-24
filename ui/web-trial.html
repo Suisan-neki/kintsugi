@@ -29,7 +29,8 @@
       <label class="system-label" for="preparer">記入者名または識別名</label><input id="preparer" class="system-input" required maxlength="200" autocomplete="off">
       <label class="system-label" for="concern">改善したいこと</label><textarea id="concern" class="system-input" rows="3" maxlength="4000" required></textarea>
       <label class="system-label" for="task">利用者に試してもらう操作</label><textarea id="task" class="system-input" rows="3" maxlength="4000" required></textarea>
-      <label class="system-label" for="conditions">試験用データ・環境・操作の条件</label><textarea id="conditions" class="system-input" rows="3" maxlength="4000" required></textarea>
+      <label class="system-label" for="conditions">試験用データ・環境・操作の条件</label><textarea id="conditions" class="system-input" rows="3" maxlength="4000" aria-describedby="conditions-help" required></textarea>
+      <p id="conditions-help" class="note">初期データ、環境の起動・終了方法、操作後のデータの扱いを記録してください。A・Bで条件が異なる場合は、その違いも書いてください。</p>
       <div id="variant-fields" class="grid-2"></div>
       <button class="dads-button" data-type="solid-fill" data-size="md" type="submit">試用計画を登録する</button>
     </form>

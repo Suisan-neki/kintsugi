@@ -183,12 +183,26 @@ fn trial_targets_reject_unpinned_or_unrelated_sources_and_unsafe_urls_without_sa
     p.variants[1].source.commit = p.variants[0].source.commit.clone();
     assert!(case.apply(Change::AddUserTrialPlan { plan: p }).is_err());
     let mut p = plan();
-    p.variants[1].source.repository = "other/project".into();
+    p.variants[1].url = "http://127.0.0.1:8081".into();
     assert!(case.apply(Change::AddUserTrialPlan { plan: p }).is_err());
     let mut p = plan();
     p.variants[0].evidence_ids.push("missing".into());
     assert!(case.apply(Change::AddUserTrialPlan { plan: p }).is_err());
     assert_eq!(revision_count(&case.0), 1);
+}
+
+#[test]
+fn an_oss_fork_keeps_its_actual_repository_identity() {
+    let case = Case::new();
+    let mut p = plan();
+    p.variants[1].source.repository = "research-team/openemr".into();
+    let saved = case.apply(Change::AddUserTrialPlan { plan: p }).unwrap();
+    assert_eq!(
+        saved.workspace.user_trial_plans[0].variants[1]
+            .source
+            .repository,
+        "research-team/openemr"
+    );
 }
 
 #[test]

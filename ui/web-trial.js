@@ -16,7 +16,10 @@ function h(tag, attrs = {}, ...children) {
   return node;
 }
 const button = (text, onclick) => h('button', { type: 'button', class: 'dads-button', 'data-type': 'outline', 'data-size': 'sm', onclick }, text);
-const field = (label, id, control, help) => h('div', {}, h('label', { class: 'system-label', for: id }, label), control, help ? h('p', { class: 'note' }, help) : null);
+const field = (label, id, control, help) => {
+  if (help) control.setAttribute('aria-describedby', id + '-help');
+  return h('div', {}, h('label', { class: 'system-label', for: id }, label), control, help ? h('p', { id: id + '-help', class: 'note' }, help) : null);
+};
 const text = (id, attrs = {}) => h('input', { id, class: 'system-input', required: true, maxlength: 200, ...attrs });
 const area = (id, attrs = {}) => h('textarea', { id, class: 'system-input', required: true, rows: 3, maxlength: 4000, ...attrs });
 const detail = (title, ...body) => h('details', {}, h('summary', {}, title), ...body);
@@ -34,13 +37,15 @@ async function api(method, path, body) {
 async function guarded(task) {
   if (busy) return;
   busy = true;
+  $('main').setAttribute('aria-busy', 'true');
+  $('status').textContent = '';
   $('alert').replaceChildren();
   try { await task(); } catch (error) {
     const alert = h('div', { class: 'box', tabindex: '-1' }, h('p', {}, error.message));
     if (error.status === 409) alert.append(h('p', {}, 'ほかの操作で記録が更新されています。入力を控えてから、最新の記録を読み直してください。'));
     $('alert').replaceChildren(alert);
     alert.focus();
-  } finally { busy = false; }
+  } finally { busy = false; $('main').removeAttribute('aria-busy'); }
 }
 async function change(action, actor, reason) {
   view = await api('POST', 'change', { expected_revision: view.workspace.revision, actor, reason, action });
@@ -56,16 +61,33 @@ function selectSession(id) {
 function planDetails(plan) {
   return h('div', {}, h('h3', {}, plan.concern), h('p', {}, plan.task), h('p', {}, '試す条件：', plan.conditions));
 }
+function planCurrent(plan) {
+  const entries = value => JSON.stringify(Object.entries(value || {}).sort(([a], [b]) => a.localeCompare(b)));
+  return entries(plan.check_versions) === entries(Object.fromEntries(view.workspace.checks.map(check => [check.id, check.version])))
+    && entries(plan.context) === entries(view.workspace.context);
+}
+function evidenceLink(evidence, variant) {
+  const url = new URL('/workbench', location.origin);
+  url.searchParams.set('url', 'https://github.com/' + variant.source.repository);
+  url.searchParams.set('ref', variant.source.commit);
+  url.searchParams.set('check', evidence.check_id);
+  url.searchParams.set('evidence', evidence.id);
+  url.hash = 'result';
+  return h('li', {}, h('a', { href: url.pathname + url.search + url.hash, target: '_blank', rel: 'noopener noreferrer' }, `検証記録 ${evidence.id} を見る`));
+}
 function variantDetails(variant) {
+  const evidence = variant.evidence_ids.map(id => view.workspace.evidence.find(entry => entry.id === id)).filter(Boolean);
   return detail('対象の版と技術者の検証記録',
     h('p', {}, `${variant.source.repository} @ ${variant.source.commit}`),
     h('p', {}, `${variant.source.path} ${variant.source.line}〜${variant.source.end_line}行`),
     h('p', {}, variant.evidence_ids.length ? `対応する検証記録：${variant.evidence_ids.join('、')}` : '技術者の検証記録は対応づけられていません。'),
+    evidence.length ? h('ul', {}, ...evidence.map(entry => evidenceLink(entry, variant))) : null,
     h('p', { class: 'note' }, '登録した版とURLの対応は技術者による申告です。利用者の感想は技術検証の合否や採用の合意とは別に残します。'));
 }
 function renderPlans() {
   const plans = view.workspace.user_trial_plans || [];
   $('plans').replaceChildren(...(plans.length ? plans.map(plan => {
+    if (!planCurrent(plan)) return h('article', { class: 'box' }, planDetails(plan), h('p', { class: 'note', role: 'status' }, 'この計画の作成後に、検証する条件が変わっています。新たに試用を始める場合は、技術者が現在の条件で計画を作り直してください。'));
     const input = text('participant-' + plan.id, { placeholder: '例：参加者01', autocomplete: 'off' });
     const order = h('select', { id: 'order-' + plan.id, class: 'system-input' }, h('option', { value: 'a,b' }, 'A → B'), h('option', { value: 'b,a' }, 'B → A'));
     const form = h('form', { onsubmit: event => { event.preventDefault(); guarded(async () => {
@@ -89,6 +111,7 @@ function renderSession() {
     h('p', {}, outcomes[entry.outcome]), h('p', {}, '実際の操作：', entry.operation), h('p', {}, '感想・理由：', entry.feedback),
     h('p', { class: 'note' }, '本人の申告として保存した記録です。')));
   const content = [h('p', {}, `参加者：${session.participant}　順番：${session.order.map(x => x.toUpperCase()).join(' → ')}`), planDetails(plan), ...records];
+  if (!planCurrent(plan)) content.splice(2, 0, h('p', { class: 'note', role: 'status' }, 'この試用を始めた後に、現在の検証条件が変わっています。ここで保存する感想は、上に表示した試用計画と版への記録として残ります。現在の条件で試した結果には置き換えません。'));
   if (next) {
     const variant = plan.variants.find(v => v.label === next);
     const operation = area('operation'), feedback = area('feedback');

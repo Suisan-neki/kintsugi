@@ -118,6 +118,7 @@ fn report_keeps_exact_trial_versions_and_escaped_feedback_without_endpoints_or_q
         "a".repeat(40)
     );
     assert_eq!(value["user_trial_sessions"][0]["order"], json!(["b", "a"]));
+    assert_eq!(value["user_trial_plans"][0]["conditions_current"], true);
     assert_eq!(
         value["user_trial_sessions"][0]["feedback"][0]["recorded_revision"],
         4
@@ -137,4 +138,28 @@ fn report_keeps_exact_trial_versions_and_escaped_feedback_without_endpoints_or_q
     assert!(!html.contains("<script>"));
     assert!(!html.contains("http://localhost:808"));
     assert!(!html.contains("内部設定の合成値"));
+    assert!(html.contains("計画作成時の確認条件・環境設定は、この資料の事例版と一致しています"));
+}
+
+#[test]
+fn report_marks_historical_trial_conditions_without_exporting_configuration_values() {
+    let case = recorded_case();
+    case.apply(json!({"op":"set_context", "key":"private-configuration", "value":"変更後の内部設定の合成値"}));
+    let report = review_report::build(load(&case.0).unwrap()).unwrap();
+    let value = serde_json::to_value(&report).unwrap();
+    assert_eq!(value["user_trial_plans"][0]["conditions_current"], false);
+    assert_eq!(
+        value["user_trial_sessions"][0]["feedback"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(!report.verification_passed);
+    assert!(value["user_trial_plans"][0].get("context").is_none());
+    let html = review_report::html(&report).unwrap();
+    assert!(html.contains("計画作成後に確認条件または環境設定が変わっています"));
+    assert!(!html.contains("この資料の事例版と一致しています"));
+    assert!(!html.contains("内部設定の合成値"));
+    assert!(!html.contains("http://localhost:808"));
 }

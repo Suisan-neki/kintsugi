@@ -48,10 +48,11 @@ pub struct ReportTrialPlan {
     pub created_revision: u64,
     pub recorded_by: String,
     pub check_versions: BTreeMap<String, u32>,
+    pub conditions_current: bool,
 }
 
-impl From<crate::user_trial::Plan> for ReportTrialPlan {
-    fn from(plan: crate::user_trial::Plan) -> Self {
+impl ReportTrialPlan {
+    fn from_plan(plan: crate::user_trial::Plan, conditions_current: bool) -> Self {
         Self {
             id: plan.id,
             concern: plan.concern,
@@ -65,6 +66,7 @@ impl From<crate::user_trial::Plan> for ReportTrialPlan {
             created_revision: plan.created_revision,
             recorded_by: plan.recorded_by,
             check_versions: plan.check_versions,
+            conditions_current,
         }
     }
 }
@@ -90,6 +92,21 @@ pub struct Report {
 }
 pub fn build(workspace: Workspace) -> io::Result<Report> {
     workspace::validate(&workspace)?;
+    let check_versions: BTreeMap<_, _> = workspace
+        .checks
+        .iter()
+        .map(|check| (check.id.clone(), check.version))
+        .collect();
+    let current_trial_conditions: BTreeMap<_, _> = workspace
+        .user_trial_plans
+        .iter()
+        .map(|plan| {
+            (
+                plan.id.clone(),
+                plan.check_versions == check_versions && plan.context == workspace.context,
+            )
+        })
+        .collect();
     let (domain, selection_version) = profile::current(&workspace);
     let mut view = workspace::view(workspace);
     let checks = view
@@ -177,7 +194,10 @@ pub fn build(workspace: Workspace) -> io::Result<Report> {
             .workspace
             .user_trial_plans
             .into_iter()
-            .map(Into::into)
+            .map(|plan| {
+                let conditions_current = current_trial_conditions[&plan.id];
+                ReportTrialPlan::from_plan(plan, conditions_current)
+            })
             .collect(),
         user_trial_sessions: view.workspace.user_trial_sessions,
         limits: vec![
@@ -218,9 +238,14 @@ fn user_trials(out: &mut String, report: &Report) {
     out.push_str("<h2>人によるWebアプリの試用</h2><p>操作と感想は自己申告です。自動試験の判定、保存状態の独立した確認、利用への合意とは区別します。</p>");
     for plan in &report.user_trial_plans {
         out.push_str(&format!(
-            "<section><h3>試用計画 {}</h3><p>相談：{}</p><p>試す操作：{}</p><p>試用条件・手順：{}</p><p>作成時の事例版{}／記入者：{}</p><ul>",
+            "<section><h3>試用計画 {}</h3><p>相談：{}</p><p>試す操作：{}</p><p>試用条件・手順：{}</p><p>作成時の事例版{}／記入者：{}</p><p>{}</p><ul>",
             escape(&plan.id), escape(&plan.concern), escape(&plan.task),
-            escape(&plan.conditions), plan.created_revision, escape(&plan.recorded_by)
+            escape(&plan.conditions), plan.created_revision, escape(&plan.recorded_by),
+            if plan.conditions_current {
+                "計画作成時の確認条件・環境設定は、この資料の事例版と一致しています。"
+            } else {
+                "計画作成後に確認条件または環境設定が変わっています。以前の試用記録を現在の条件での試用とみなしません。"
+            }
         ));
         for variant in &plan.variants {
             out.push_str(&format!(
