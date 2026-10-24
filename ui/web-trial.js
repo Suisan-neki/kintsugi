@@ -1,7 +1,7 @@
 // 人が操作した内容は自己申告として保存する。リンクを開いただけで試用済みにはしない。
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="review-token"]').content;
-let view, busy = false, displacedDraft = null;
+let view, busy = false, displacedDraft = null, handoffRevision = null;
 let sessionId = new URL(location.href).searchParams.get('session');
 const outcomes = { completed: '操作を終えた', blocked: '途中で進めなくなった', not_tried: '試せなかった' };
 function h(tag, attrs = {}, ...children) {
@@ -52,6 +52,8 @@ async function change(action, actor, reason) {
 }
 function selectSession(id) {
   sessionId = id;
+  // フォームの下書きを保持する間は、対応する比較の版も保持する。
+  if (handoffRevision === null) $('handoff-notice').hidden = true;
   const url = new URL(location.href);
   for (const key of ['check', 'before', 'after', 'revision']) url.searchParams.delete(key);
   url.searchParams.set('session', id);
@@ -161,9 +163,11 @@ for (const label of ['a', 'b']) {
 $('plan-form').addEventListener('submit', event => {
   event.preventDefault();
   guarded(async () => {
+    if (handoffRevision !== null && handoffRevision !== view.workspace.revision) throw Error('比較した後に記録が更新されています。入力を控えて、技術者の検証画面で比較し直してください。');
     const variants = ['a', 'b'].map(label => ({ label, source: { repository: read(label + '-repository'), commit: read(label + '-commit'), path: read(label + '-path'), line: Number(read(label + '-line')), end_line: Number(read(label + '-end-line')) }, url: read(label + '-url'), evidence_ids: read(label + '-evidence').split(',').map(x => x.trim()).filter(Boolean) }));
     await change({ op: 'add_user_trial_plan', plan: { id: 'web-' + crypto.randomUUID(), concern: read('concern'), task: read('task'), conditions: read('conditions'), variants } }, read('preparer'), '固定版と条件を対応づけたWeb試用計画を登録した');
     $('plan-form').reset();
+    handoffRevision = null;
     $('handoff-notice').hidden = true;
     const url = new URL(location.href);
     for (const key of ['check', 'before', 'after', 'revision']) url.searchParams.delete(key);
@@ -194,6 +198,10 @@ async function reload() {
       renderDisplacedDraft();
     }
   }
+  if (handoffRevision !== null && handoffRevision !== view.workspace.revision) {
+    $('handoff-notice').textContent = '比較した後に記録が更新されたため、この下書きは登録できません。入力は残しています。技術者の検証画面で最新の記録を比較し直してください。';
+    $('handoff-notice').hidden = false;
+  }
 }
 $('choose-plan').addEventListener('click', () => {
   sessionId = null;
@@ -204,6 +212,7 @@ $('choose-plan').addEventListener('click', () => {
 });
 $('reload').addEventListener('click', () => guarded(async () => { await reload(); $('status').textContent = '最新の記録を読み込みました。'; }));
 async function prepareFromComparison() {
+  const requestedLocation = location.href;
   const params = new URLSearchParams(location.search);
   const keys = ['check', 'before', 'after', 'revision'];
   if (!keys.some(key => params.has(key))) return;
@@ -214,11 +223,12 @@ async function prepareFromComparison() {
   const check = view.workspace.checks.find(check => check.id === params.get('check'));
   if (!check) reject();
   const comparison = await api('POST', 'compare', { expected_revision: Number(revision), check_id: check.id, before_id: params.get('before'), after_id: params.get('after') });
+  if (location.href !== requestedLocation) return;
   const trials = [comparison.before, comparison.after];
   const sources = trials.map(trial => trial.source);
   if (sources.some(source => !source || !/^[a-f0-9]{40}$/.test(source.commit)) || sources[0].commit === sources[1].commit) reject();
   if (trials.some((trial, index) => trial.execution_source && (trial.execution_source.repository !== sources[index].repository || trial.execution_source.commit !== sources[index].commit))) reject();
-  // 全項目の対応を確認してから反映する。入力の下書きだけを作り、事例へは保存しない。
+  // 全項目を照合してから下書きへ反映する。上流とforkも、各版の実際の参照を保持する。
   $('concern').value = check.text;
   for (const [index, label] of ['a', 'b'].entries()) {
     const source = sources[index];
@@ -226,6 +236,7 @@ async function prepareFromComparison() {
     $(label + '-end-line').value = source.end_line;
     $(label + '-evidence').value = trials[index].evidence.id;
   }
+  handoffRevision = Number(revision);
   $('handoff-notice').textContent = '比較した版と検証記録を下書きに引き継ぎました。試用する操作・条件・記入者と、手動で起動した試用環境のURLを記入してください。まだ登録していません。';
   $('handoff-notice').hidden = false;
   $('prepare').open = true;
