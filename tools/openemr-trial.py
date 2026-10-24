@@ -87,7 +87,7 @@ def prepare(directory, before_path, after_path, allow_identical=False):
         }
         compose["services"]["openemr-" + label] = {
             "image": app["image"], "platform": "linux/amd64", "restart": "no",
-            "networks": [label], "ports": [{"target": 443, "host_ip": "127.0.0.1", "protocol": "tcp"}],
+            "networks": [label], "ports": [{"target": 443, "published": "0", "host_ip": "127.0.0.1", "protocol": "tcp"}],
             "depends_on": {"mysql-" + label: {"condition": "service_healthy"}},
             "environment": {"MYSQL_HOST": "mysql-" + label, "MYSQL_ROOT_PASS": root_password,
                             "MYSQL_USER": "openemr", "MYSQL_PASS": db_password,
@@ -128,6 +128,20 @@ def check_engine():
         raise ValueError("この試用環境は、localhost 公開ポートの修正を含む Docker Engine 28 以降が必要です")
 
 
+def port_diagnostic(service):
+    """Inspect only network fields: full inspect output would expose environment secrets."""
+    result = {"service": service.get("Service"), "compose_publishers": service.get("Publishers")}
+    container = service.get("ID", "")
+    if re.fullmatch(r"[0-9a-f]{12,64}", container):
+        for name, field in [("requested", ".HostConfig.PortBindings"), ("actual", ".NetworkSettings.Ports")]:
+            try:
+                result[name] = json.loads(subprocess.check_output(
+                    ["docker", "inspect", "--format", "{{json " + field + "}}", container], text=True))
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                result[name] = {"unavailable": type(error).__name__}
+    return result
+
+
 def status(directory, manifest):
     raw = docker(directory, manifest, "ps", "--all", "--format", "json", capture=True).stdout.strip()
     # Compose releases have emitted both arrays and one JSON object per line.
@@ -138,9 +152,16 @@ def status(directory, manifest):
         if not service or service["State"] != "running":
             continue
         publishers = service.get("Publishers") or []
-        bindings = [p for p in publishers if p["TargetPort"] == 443 and p.get("PublishedPort")]
-        if len(bindings) != 1 or bindings[0]["URL"] != "127.0.0.1":
-            raise ValueError("公開ポートが 127.0.0.1 に限定されていません。down で停止してください")
+        bindings = [p for p in publishers if str(p.get("PublishedPort", "0")).isdigit()
+                    and 0 < int(p["PublishedPort"]) <= 65535]
+        if len(bindings) != 1 or str(bindings[0].get("TargetPort")) != "443" or bindings[0].get("URL") != "127.0.0.1":
+            manifest["port_diagnostic"] = port_diagnostic(service)
+            manifest["state"] = "port_unavailable"
+            write_json(directory / "trial.json", manifest)
+            print(json.dumps(manifest["port_diagnostic"], ensure_ascii=False), file=sys.stderr)
+            if not bindings:
+                raise ValueError("Dockerがlocalhost公開ポートを割り当てていません。内部ネットワークの設定を維持して停止しました。down で停止してください")
+            raise ValueError("公開ポートが 127.0.0.1 の443転送に限定されていません。down で停止してください")
         base = "https://127.0.0.1:" + str(bindings[0]["PublishedPort"])
         host = "127.0.0.1" if variant["label"] == "A" else "localhost"
         variant["url"] = f"https://{host}:{bindings[0]['PublishedPort']}/interface/login/login.php"

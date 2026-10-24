@@ -40,7 +40,7 @@ class TrialTest(unittest.TestCase):
             self.assertEqual(app["networks"], [label])
             self.assertTrue(compose["networks"][label]["internal"])
             self.assertNotIn("ports", db)
-            self.assertEqual(app["ports"], [{"target": 443, "host_ip": "127.0.0.1", "protocol": "tcp"}])
+            self.assertEqual(app["ports"], [{"target": 443, "published": "0", "host_ip": "127.0.0.1", "protocol": "tcp"}])
             self.assertEqual(db["volumes"], ["db-" + label + ":/var/lib/mysql"])
             self.assertNotIn("volumes", app)
             self.assertEqual(app["environment"]["MYSQL_HOST"], "mysql-" + label)
@@ -91,10 +91,23 @@ class TrialTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "127.0.0.1"):
                 trial.status(self.output, manifest)
 
+    def test_missing_binding_is_reported_without_env_secrets(self):
+        manifest = self.prepare()
+        row = {"Service": "openemr-a", "ID": "a" * 64, "State": "running", "Publishers": None}
+        with patch.object(trial, "docker") as docker, patch.object(trial.subprocess, "check_output") as inspect:
+            docker.return_value.stdout = json.dumps(row)
+            inspect.side_effect = ['{"443/tcp":[{"HostIp":"127.0.0.1","HostPort":"0"}]}', '{"443/tcp":null}']
+            with self.assertRaisesRegex(ValueError, "割り当てていません"):
+                trial.status(self.output, manifest)
+        saved = trial.load(self.output)
+        self.assertEqual(saved["port_diagnostic"]["actual"], {"443/tcp": None})
+        self.assertEqual(saved["state"], "port_unavailable")
+        self.assertTrue(all(".Config.Env" not in str(call) for call in inspect.call_args_list))
+
     def test_ready_urls_have_distinct_hosts_and_no_query_or_credentials(self):
         manifest = self.prepare()
         rows = [{"Service": "openemr-" + label, "State": "running", "Publishers": [
-            {"TargetPort": 443, "PublishedPort": port, "URL": "127.0.0.1"}]}
+            {"TargetPort": "443", "PublishedPort": str(port), "URL": "127.0.0.1"}]}
                 for label, port in [("a", 34001), ("b", 34002)]]
         with patch.object(trial, "docker") as docker, patch.object(trial.urllib.request, "build_opener") as opener:
             docker.return_value.stdout = json.dumps(rows)
