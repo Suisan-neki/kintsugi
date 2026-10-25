@@ -151,6 +151,20 @@ fn check(
     }
 }
 
+/// 試行名の接頭辞と対象の名前から、起動中の対象のコンテナ名を探す。試験の並列実行で連番が変わる。
+fn container_named(trial: &str, service: &str) -> String {
+    let output = Command::new("docker")
+        .args(["ps", "--format", "{{.Names}}", "--filter"])
+        .arg(format!("name=eel-{trial}-"))
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|name| name.ends_with(&format!("-{service}")))
+        .unwrap_or_else(|| panic!("{service} のコンテナが見つかりません"))
+        .to_owned()
+}
+
 fn docker_available() -> bool {
     match engine() {
         Ok(_) => true,
@@ -176,17 +190,8 @@ fn blocked_egress_keeps_the_target_from_reaching_outside() {
     let port = session.port_of("web").unwrap();
     // ホストの127.0.0.1からはゲートウェイ経由で届く。
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
-    let container = String::from_utf8(
-        Command::new("docker")
-            .args(["ps", "-q", "--filter", "label=eel.role=app", "--filter"])
-            .arg("name=eel-egress-blocked-1-web")
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    let container = container.trim();
-    assert!(!container.is_empty(), "対象のコンテナが見つかりません");
+    let container = container_named("egress-blocked", "web");
+    let container = container.as_str();
     // 対象のコンテナから外部のIPへ接続できない。
     let outside = Command::new("docker")
         .args([
@@ -219,10 +224,65 @@ fn blocked_egress_keeps_the_target_from_reaching_outside() {
         "{caps}"
     );
     let phase = session.snapshot();
+    let host = phase
+        .traffic
+        .iter()
+        .find(|t| t.from == HOST_CLIENT && t.to == "web")
+        .expect("ホストから対象への接続が記録されていない");
+    assert!(host.connections >= 1, "{host:?}");
     assert_eq!(phase.egress, "blocked");
     assert!(phase.egress_confirmed);
     let leftovers = session.cleanup().unwrap();
     assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+#[ignore = "Dockerと固定イメージを使うため、手動・週次の統合試験で実行"]
+fn traffic_between_targets_and_failures_are_recorded() {
+    if !docker_available() {
+        return;
+    }
+    let spec = ContainerSpec {
+        services: vec![
+            nginx("web", ServiceRole::App),
+            nginx("back", ServiceRole::Other),
+        ],
+        egress: Egress::Blocked,
+    };
+    let mut session = Session::start("traffic", &spec).unwrap();
+    assert!(session.all_ready());
+    let web = container_named("traffic", "web");
+    let web = web.as_str();
+    let back = container_named("traffic", "back");
+    let fetch = |url: &str| {
+        Command::new("docker")
+            .args(["exec", web, "wget", "-q", "-T", "3", "-O", "-", url])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    // 対象どうしの通信は中継を通って届く。
+    assert!(fetch("http://back/"));
+    // 接続先が止まると失敗し、その失敗も記録される。
+    Command::new("docker")
+        .args(["stop", "-t", "1", &back])
+        .output()
+        .unwrap();
+    assert!(!fetch("http://back/"));
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let phase = session.snapshot();
+    let peer = phase
+        .traffic
+        .iter()
+        .find(|t| t.from == "web" && t.to == "back")
+        .unwrap_or_else(|| panic!("対象どうしの接続が記録されていない: {:?}", phase.traffic));
+    assert!(peer.connections >= 2, "{peer:?}");
+    // 止まった接続先への接続は、失敗として閉じるか、閉じないまま残る。どちらも「成功」には数えない。
+    assert!(peer.failed + peer.unfinished >= 1, "{peer:?}");
+    assert!(peer.bytes_to_client > 0, "{peer:?}");
+    assert!(phase.traffic_note.contains("中継を通った"));
+    assert!(session.cleanup().unwrap().is_empty());
 }
 
 #[test]
@@ -616,6 +676,26 @@ fn openemr_becomes_ready_with_pinned_images() {
         "{}",
         result.assessment.reason
     );
+    let trace: ExecutionTrace =
+        serde_json::from_str(&fs::read_to_string(result.directory.join("execution.json")).unwrap())
+            .unwrap();
+    let phase = trace.containers.expect("containers");
+    // 実際のOpenEMRからMariaDBへの接続が、中継を通って記録されている。
+    let to_db = phase
+        .traffic
+        .iter()
+        .find(|t| t.from == "openemr" && t.to == "mysql")
+        .unwrap_or_else(|| {
+            panic!(
+                "OpenEMRからDBへの接続が記録されていない: {:?}",
+                phase.traffic
+            )
+        });
+    assert!(
+        to_db.connections >= 1 && to_db.bytes_to_client > 0,
+        "{to_db:?}"
+    );
+    assert!(phase.egress_confirmed);
 }
 
 #[test]

@@ -101,10 +101,12 @@ impl Egress {
     }
 }
 
-/// 遮断時に、ホストの127.0.0.1と内部ネットワークの間だけを中継するコンテナ。対象ではなく基盤が使う。
+/// 遮断時に、各対象の前に置く中継コンテナ。ホストの127.0.0.1と対象、対象どうしの接続をここで通し、記録する。対象ではなく基盤が使う。
+/// 対象の本体はネットワーク別名`<名前>-real`で動き、ほかの対象は元の名前で中継へ接続する。
 const GATEWAY_IMAGE: &str =
     "nginx@sha256:4ff102c5d78d254a6f0da062b3cf39eaf07f01eec0927fd21e219d0af8bc0591";
-const GATEWAY_PORT: u16 = 8080;
+const MAX_TRAFFIC_LOG: usize = 4 * 1024 * 1024;
+const MAX_TRAFFIC_ROWS: usize = 64;
 /// 対象のコンテナに残す権限。ほかはすべて外す。
 const KEPT_CAPABILITIES: [&str; 6] = [
     "CHOWN",
@@ -157,6 +159,12 @@ pub struct ContainerPhase {
     /// 基盤が試験用ネットワークを読み出して、外部へ出る経路がないと確認できたか。
     #[serde(default)]
     pub egress_confirmed: bool,
+    /// 中継が記録した、対象への接続の集計。古い記録にはない。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub traffic: Vec<TrafficSummary>,
+    /// 通信の記録で観測できたことと、できなかったこと。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub traffic_note: String,
 
     pub volumes: Vec<String>,
     pub services: Vec<ServicePhase>,
@@ -170,6 +178,126 @@ pub struct ContainerPhase {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub http_reads: Vec<crate::http_probe::HttpRead>,
     pub detail: String,
+}
+
+/// 基盤から対象への接続を表す接続元の名前。ブラウザ操作器・HTTP操作・準備確認など。
+pub const HOST_CLIENT: &str = "host（基盤・ブラウザ操作器）";
+
+/// 接続元から接続先の対象への接続を集計したもの。通信の中身は含まない。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrafficSummary {
+    pub from: String,
+    pub to: String,
+    /// 開始した接続の数（`unfinished`を含む）。
+    pub connections: u32,
+    /// 閉じた接続のうち、中継が対象へつなげなかった、または対象が応答せず閉じたもの。
+    pub failed: u32,
+    /// 開始したが、記録を取る時点までに閉じなかった接続。接続先が止まって待たされた接続を含む。
+    #[serde(default)]
+    pub unfinished: u32,
+    pub bytes_from_client: u64,
+    pub bytes_to_client: u64,
+    pub first_at_ms: u64,
+    pub last_at_ms: u64,
+}
+
+struct Addresses {
+    /// 内部ネットワークのIPアドレス → 対象の名前
+    clients: BTreeMap<String, String>,
+    /// 中継のコンテナ名 → 外部向けネットワークのIPアドレス
+    edges: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TapLine {
+    id: u64,
+    t: f64,
+    client: String,
+    local: String,
+    status: String,
+    #[serde(rename = "in")]
+    bytes_in: u64,
+    out: u64,
+}
+
+fn record_connection(
+    rows: &mut BTreeMap<(String, String), TrafficSummary>,
+    from: &str,
+    to: &str,
+    entry: &TapLine,
+) {
+    let at = (entry.t * 1000.0) as u64;
+    let row = rows
+        .entry((from.to_owned(), to.to_owned()))
+        .or_insert_with(|| TrafficSummary {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            connections: 0,
+            failed: 0,
+            unfinished: 0,
+            bytes_from_client: 0,
+            bytes_to_client: 0,
+            first_at_ms: at,
+            last_at_ms: at,
+        });
+    row.connections += 1;
+    if entry.status != "200" {
+        row.failed += 1;
+    }
+    row.bytes_from_client += entry.bytes_in;
+    row.bytes_to_client += entry.out;
+    row.first_at_ms = if row.first_at_ms == 0 {
+        at
+    } else {
+        row.first_at_ms.min(at)
+    };
+    row.last_at_ms = row.last_at_ms.max(at);
+}
+
+fn record_unfinished(rows: &mut BTreeMap<(String, String), TrafficSummary>, from: &str, to: &str) {
+    let row = rows
+        .entry((from.to_owned(), to.to_owned()))
+        .or_insert_with(|| TrafficSummary {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            connections: 0,
+            failed: 0,
+            unfinished: 0,
+            bytes_from_client: 0,
+            bytes_to_client: 0,
+            first_at_ms: 0,
+            last_at_ms: 0,
+        });
+    row.connections += 1;
+    row.unfinished += 1;
+}
+
+/// 中継のエラーログ（infoレベル）にある「接続を受けた」行から、接続の番号と接続元のIPアドレスを読む。
+fn started_connections(errors: &str) -> Vec<(u64, String)> {
+    errors
+        .lines()
+        .filter_map(|line| {
+            let rest = line.split_once(": *")?.1;
+            let (id, rest) = rest.split_once(" client ")?;
+            let (address, _) = rest.split_once(" connected to ")?;
+            let ip = address.rsplit_once(':')?.0;
+            Some((id.parse().ok()?, ip.to_owned()))
+        })
+        .collect()
+}
+
+/// コンテナが指定のネットワークで持つIPv4アドレス。
+fn container_ip(container: &str, network: &str) -> Option<String> {
+    let json = docker_text(&[
+        "inspect",
+        "--format",
+        "{{json .NetworkSettings.Networks}}",
+        container,
+    ])
+    .ok()?;
+    let value: serde_json::Value = serde_json::from_str(&json).ok()?;
+    let ip = value.get(network)?.get("IPAddress")?.as_str()?;
+    (!ip.is_empty()).then(|| ip.to_owned())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,7 +332,7 @@ struct Running {
     ready_after_ms: Option<u64>,
     detail: String,
     web_build: Option<crate::prepared_web::BuildBasis>,
-    gateway: Option<String>,
+    tap: Option<String>,
 }
 
 pub fn image_digest(image: &str) -> Option<&str> {
@@ -539,7 +667,7 @@ impl Session {
             "--network".into(),
             self.network.clone(),
             "--network-alias".into(),
-            service.name.clone(),
+            self.alias(&service.name),
             "--restart".into(),
             "no".into(),
         ];
@@ -579,8 +707,8 @@ impl Session {
         } else {
             docker_text(&arg_refs)?;
         }
-        let gateway = if self.egress == Egress::Blocked {
-            match self.start_gateway(service, port) {
+        let tap = if self.egress == Egress::Blocked {
+            match self.start_tap(service, port) {
                 Ok(name) => Some(name),
                 Err(error) => {
                     let _ = docker(&["rm", "-f", &container]);
@@ -600,7 +728,7 @@ impl Session {
             ready_after_ms: None,
             detail: String::new(),
             web_build: assets.as_ref().map(|s| s.basis.clone()),
-            gateway,
+            tap,
         };
         match wait_ready(&running) {
             Ok(ms) => {
@@ -618,16 +746,25 @@ impl Session {
         Ok(())
     }
 
-    /// 内部ネットワークの対象へ、ホストの127.0.0.1から届く経路だけを作る。対象は外へ出られない。
-    fn start_gateway(&self, service: &Service, port: u16) -> io::Result<String> {
+    /// 対象の本体のネットワーク別名。遮断時は中継が元の名前を受け持つ。
+    fn alias(&self, name: &str) -> String {
+        match self.egress {
+            Egress::Blocked => format!("{name}-real"),
+            Egress::Allowed => name.to_owned(),
+        }
+    }
+
+    /// 対象の前に置く中継。ホストの127.0.0.1と対象、対象どうしの接続を通し、接続ごとの結果を標準出力へ残す。
+    fn start_tap(&self, service: &Service, port: u16) -> io::Result<String> {
         pull(GATEWAY_IMAGE)?;
-        let name = format!("eel-{}-{}-gw", self.trial, service.name);
+        let name = format!("eel-{}-{}-tap", self.trial, service.name);
         let config = format!(
-            "user root;pid /tmp/gw.pid;error_log /dev/stderr warn;events{{}}stream{{resolver 127.0.0.11 valid=1s;server{{listen {GATEWAY_PORT};set $upstream {}:{};proxy_half_close on;proxy_pass $upstream;}}}}",
-            service.name, service.expose
+            "user root;pid /tmp/tap.pid;error_log /dev/stderr info;events{{}}stream{{resolver 127.0.0.11 valid=1s;resolver_timeout 2s;log_format eel escape=json \"{{\\\"id\\\":$connection,\\\"t\\\":$msec,\\\"client\\\":\\\"$remote_addr\\\",\\\"local\\\":\\\"$server_addr\\\",\\\"status\\\":\\\"$status\\\",\\\"in\\\":$bytes_received,\\\"out\\\":$bytes_sent}}\";access_log /dev/stdout eel;server{{listen {expose};set $upstream {real}:{expose};proxy_half_close on;proxy_pass $upstream;}}}}",
+            expose = service.expose,
+            real = self.alias(&service.name),
         );
         let script = format!(
-            "printf '%s' '{config}' > /tmp/gw.conf && exec nginx -c /tmp/gw.conf -g 'daemon off;'"
+            "printf '%s' '{config}' > /tmp/tap.conf && exec nginx -c /tmp/tap.conf -g 'daemon off;'"
         );
         let mut args: Vec<String> = vec![
             "create".into(),
@@ -638,11 +775,11 @@ impl Session {
             "--label".into(),
             format!("eel.trial={}", self.trial),
             "--label".into(),
-            "eel.role=gateway".into(),
+            "eel.role=tap".into(),
             "--network".into(),
             self.edge.clone(),
             "--publish".into(),
-            format!("127.0.0.1:{port}:{GATEWAY_PORT}"),
+            format!("127.0.0.1:{port}:{}", service.expose),
             "--restart".into(),
             "no".into(),
         ];
@@ -656,13 +793,111 @@ impl Session {
         ]);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         docker_text(&refs)?;
-        let started = docker_text(&["network", "connect", &self.network, &name])
-            .and_then(|_| docker_text(&["start", &name]));
+        let started = docker_text(&[
+            "network",
+            "connect",
+            "--alias",
+            &service.name,
+            &self.network,
+            &name,
+        ])
+        .and_then(|_| docker_text(&["start", &name]));
         if let Err(error) = started {
             let _ = docker(&["rm", "-f", &name]);
             return Err(error);
         }
         Ok(name)
+    }
+
+    /// 中継が記録した接続を、接続元と接続先の対象ごとに集計する。
+    fn traffic(&self, addresses: &Addresses) -> (Vec<TrafficSummary>, String) {
+        if self.egress == Egress::Allowed {
+            return (
+                vec![],
+                "外部通信を許可した試行では、対象どうしの通信を記録していない".into(),
+            );
+        }
+        let clients = &addresses.clients;
+        let mut rows: BTreeMap<(String, String), TrafficSummary> = BTreeMap::new();
+        let mut unparsed = 0usize;
+        let mut truncated = false;
+        for service in &self.services {
+            let Some(tap) = &service.tap else { continue };
+            let edge_ip = addresses.edges.get(tap);
+            let output = docker(&["logs", tap]).ok();
+            let (text, errors) = output
+                .map(|o| {
+                    (
+                        String::from_utf8_lossy(&o.stdout).into_owned(),
+                        String::from_utf8_lossy(&o.stderr).into_owned(),
+                    )
+                })
+                .unwrap_or_default();
+            if text.len() > MAX_TRAFFIC_LOG || errors.len() > MAX_TRAFFIC_LOG {
+                truncated = true;
+            }
+            let text: String = text.chars().take(MAX_TRAFFIC_LOG).collect();
+            let errors: String = errors.chars().take(MAX_TRAFFIC_LOG).collect();
+            let mut finished = std::collections::BTreeSet::new();
+            for line in text.lines().filter(|l| l.starts_with('{')) {
+                match serde_json::from_str::<TapLine>(line) {
+                    Ok(entry) => {
+                        finished.insert(entry.id);
+                        let from = match clients.get(&entry.client) {
+                            Some(name) => name.clone(),
+                            None if edge_ip.is_some_and(|ip| *ip == entry.local) => {
+                                HOST_CLIENT.to_owned()
+                            }
+                            None => format!("不明（{}）", entry.client),
+                        };
+                        record_connection(&mut rows, &from, &service.spec.name, &entry);
+                    }
+                    Err(_) => unparsed += 1,
+                }
+            }
+            for (id, client) in started_connections(&errors) {
+                if !finished.contains(&id) {
+                    let from = clients
+                        .get(&client)
+                        .cloned()
+                        .unwrap_or_else(|| HOST_CLIENT.to_owned());
+                    record_unfinished(&mut rows, &from, &service.spec.name);
+                }
+            }
+        }
+        let mut summary: Vec<TrafficSummary> = rows.into_values().collect();
+        summary.truncate(MAX_TRAFFIC_ROWS);
+        let mut note = String::from(
+            "中継を通った接続（接続元・接続先の対象、成否、バイト数）を記録した。閉じなかった接続は件数だけで、成否とバイト数は分からない。中継を通らない通信と、通信の中身は記録していない",
+        );
+        if unparsed > 0 {
+            note.push_str(&format!("。読み取れない行が{unparsed}件あった"));
+        }
+        if truncated {
+            note.push_str("。ログが上限を超えたため後半を省略した");
+        }
+        (summary, note)
+    }
+
+    /// 中継と対象を止める前に、IPアドレスと名前の対応を読む。止めた後は読めない。
+    fn addresses(&self) -> Addresses {
+        Addresses {
+            clients: self
+                .services
+                .iter()
+                .filter_map(|s| {
+                    container_ip(&s.container, &self.network).map(|ip| (ip, s.spec.name.clone()))
+                })
+                .collect(),
+            edges: self
+                .services
+                .iter()
+                .filter_map(|s| {
+                    let tap = s.tap.as_ref()?;
+                    Some((tap.clone(), container_ip(tap, &self.edge)?))
+                })
+                .collect(),
+        }
     }
 
     pub fn ports(&self) -> BTreeMap<String, u16> {
@@ -753,7 +988,7 @@ impl Session {
             "--network".into(),
             self.network.clone(),
             "--network-alias".into(),
-            name,
+            self.alias(&name),
             "--restart".into(),
             "no".into(),
         ];
@@ -929,11 +1164,17 @@ impl Session {
     }
 
     pub fn snapshot(&self) -> ContainerPhase {
+        let addresses = self.addresses();
+        if self.egress == Egress::Blocked {
+            for service in &self.services {
+                if let Some(tap) = &service.tap {
+                    let _ = docker(&["stop", "-t", "2", tap]);
+                }
+            }
+        }
+        let (traffic, traffic_note) = self.traffic(&addresses);
         for service in &self.services {
             let _ = docker(&["stop", "-t", "2", &service.container]);
-            if let Some(gateway) = &service.gateway {
-                let _ = docker(&["stop", "-t", "2", gateway]);
-            }
         }
         let leftovers = labeled(&self.trial);
         ContainerPhase {
@@ -941,6 +1182,8 @@ impl Session {
             network: self.network.clone(),
             egress: self.egress.label().into(),
             egress_confirmed: self.egress_confirmed,
+            traffic,
+            traffic_note,
             volumes: self.volumes.clone(),
             services: self
                 .services
@@ -977,8 +1220,8 @@ impl Session {
 
     pub fn cleanup(&mut self) -> io::Result<Vec<String>> {
         for service in self.services.iter().rev() {
-            if let Some(gateway) = &service.gateway {
-                let _ = docker(&["rm", "-f", gateway]);
+            if let Some(tap) = &service.tap {
+                let _ = docker(&["rm", "-f", tap]);
             }
             let _ = docker(&["rm", "-f", &service.container]);
         }
@@ -1081,7 +1324,10 @@ fn wait_ready(running: &Running) -> io::Result<u64> {
             )));
         }
         let ok = match &running.spec.ready {
-            ReadyCheck::Tcp => crate::server::listening(running.port),
+            ReadyCheck::Tcp => {
+                crate::server::listening(running.port)
+                    && (running.tap.is_none() || target_holds_connection(running.port))
+            }
             ReadyCheck::Http { path, tls } => {
                 http_request(running.port, *tls, "GET", path, None, None, 5000)
                     .ok()
@@ -1106,6 +1352,23 @@ fn wait_ready(running: &Running) -> io::Result<u64> {
             )));
         }
         thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// 中継は常に接続を受け付けるため、対象へつなげないときは直後に閉じられる。直後に閉じられなければ到達できたとみなす。
+fn target_holds_connection(port: u16) -> bool {
+    let Ok(mut stream) = TcpStream::connect((Ipv4Addr::LOCALHOST, port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(400)));
+    let mut byte = [0u8; 1];
+    match stream.read(&mut byte) {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(e) => matches!(
+            e.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ),
     }
 }
 
@@ -1309,6 +1572,40 @@ mod tests {
         let allowed: ContainerSpec =
             serde_json::from_str(r#"{"services":[],"egress":"allowed"}"#).unwrap();
         assert!(serde_json::to_string(&allowed).unwrap().contains("allowed"));
+    }
+
+    #[test]
+    fn connections_are_summarized_by_client_and_target() {
+        let line = |t: f64, status: &str, bytes_in: u64, out: u64| {
+            serde_json::from_str::<TapLine>(&format!(
+                r#"{{"id":1,"t":{t},"client":"10.0.0.2","local":"10.0.0.9","status":"{status}","in":{bytes_in},"out":{out}}}"#
+            ))
+            .unwrap()
+        };
+        let mut rows = BTreeMap::new();
+        record_connection(&mut rows, "app", "db", &line(1000.5, "200", 10, 100));
+        record_connection(&mut rows, "app", "db", &line(1002.0, "500", 0, 0));
+        record_connection(&mut rows, HOST_CLIENT, "app", &line(999.0, "200", 5, 50));
+        let app_to_db = &rows[&("app".to_owned(), "db".to_owned())];
+        assert_eq!(app_to_db.connections, 2);
+        assert_eq!(app_to_db.failed, 1);
+        assert_eq!(app_to_db.bytes_from_client, 10);
+        assert_eq!(app_to_db.bytes_to_client, 100);
+        assert_eq!(app_to_db.first_at_ms, 1_000_500);
+        assert_eq!(app_to_db.last_at_ms, 1_002_000);
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn unfinished_connections_are_read_from_the_error_log() {
+        let log = "2026/10/25 15:26:28 [info] 7#7: *4 client 172.18.0.4:58172 connected to 0.0.0.0:80\n\
+                   2026/10/25 15:26:28 [info] 7#7: *4 proxy 172.18.0.3:1 connected to 172.18.0.2:80\n\
+                   2026/10/25 15:26:29 [notice] 1#1: start worker process 7\n";
+        assert_eq!(started_connections(log), vec![(4, "172.18.0.4".to_owned())]);
+        let mut rows = BTreeMap::new();
+        record_unfinished(&mut rows, "web", "back");
+        let row = &rows[&("web".to_owned(), "back".to_owned())];
+        assert_eq!((row.connections, row.unfinished, row.failed), (1, 1, 0));
     }
 
     #[test]
