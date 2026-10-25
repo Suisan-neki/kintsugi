@@ -104,10 +104,16 @@ try{
   await page.reload();await page.locator('.dialogue-history summary',{hasText:'2往復'}).waitFor();
   await page.getByRole('button',{name:/立場：非技術者/}).click();await page.getByRole('button',{name:/^技術者/}).click();await page.locator('.dialogue-history summary',{hasText:'2往復'}).waitFor();
   assert.equal((await read()).turn,2);
-  await page.getByLabel('検証したい動作を確認する',{exact:true}).fill('私が保存後に開き直しても同じ内容を読める');
+  await page.getByLabel('検証する動作',{exact:true}).fill('私が保存後に開き直しても同じ内容を読める');
   await page.getByRole('button',{name:'この内容を検証する',exact:true}).click();await page.locator('#trial:not([hidden])').waitFor();
   let v=await view(),check=v.workspace.checks[0];assert.equal(check.rule,'manual_only');assert.equal(v.workspace.evidence.length,0);assert.equal(check.questions[0].text,'保存後の再読込は未検証です。');
   assert.equal(v.workspace.statements[0].confirmations.length,0);assert.equal(JSON.parse(v.workspace.statements[0].origin).dialogue_turn,2);
+  assert.equal(await page.getByLabel('検証する動作',{exact:true}).inputValue(),check.id);
+  assert.equal(await page.getByLabel('検証する動作',{exact:true}).locator('option',{hasText:check.text}).count(),1);
+  await page.getByRole('link',{name:/検証する動作を決める/}).click();
+  await page.locator(`[data-check="${check.id}"]`).waitFor();
+  await page.getByRole('button',{name:'この動作を検証する',exact:true}).click();
+  await page.locator('#trial:not([hidden])').waitFor();
   // 外部プログラムが出した合成の報告を、同じ検証事項の結果として取り込む。
   await change({op:'configure_reported_observation',check_id:check.id,criterion:{assertion:'readback_matches',subject:'notification-1'}});
   const trace=JSON.parse(execFileSync('python3',[join(root,'examples/general-observations/producer.py'),'--run-id','dialogue-reported-missing','--mode','missing'],{encoding:'utf8'}));
@@ -115,12 +121,12 @@ try{
   await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'2往復'}).waitFor();
   await ask('この結果から何が分かる？',3);const last=calls.at(-1);assert.equal(last.query.results.checks[0].result.verdict,'unknown');assert.equal(last.query.results.checks[0].result.evidence[0].run_id,'dialogue-reported-missing');
   assert.match(await page.locator('.dialogue-reply').last().innerText(),/失敗と断定できません/);
-  // 同じ期待は複製せず、同じ会話の往復で編集し直した期待も版へ反映する。
+  // 同じ期待は複製せず、同じ会話で編集した確認項目も版へ反映する。
   await page.getByRole('button',{name:'この内容で再検証する',exact:true}).click();await page.locator('#trial:not([hidden])').waitFor();
   v=await view();assert.equal(v.workspace.checks.length,1);assert.equal(v.workspace.checks[0].version,check.version);
   for(const expectation of ['開き直した後の本文が保存前の本文と一致する','二度開き直した後も保存前の本文と一致する']){
     await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
-    await page.getByLabel('検証したい動作を確認する',{exact:true}).fill(expectation);
+    await page.getByLabel('検証する動作',{exact:true}).fill(expectation);
     await page.getByRole('button',{name:'この内容で再検証する',exact:true}).click();await page.locator('#trial:not([hidden])').waitFor();
     v=await view();assert.equal(v.workspace.checks.length,1);assert.equal(v.workspace.checks[0].text,expectation);assert.equal(v.workspace.checks[0].version,++check.version);
   }

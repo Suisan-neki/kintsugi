@@ -322,7 +322,7 @@ function renderDialogue() {
   for (const [label, value] of [['気になっていること', record.concern], ['操作する人', record.actor], ['操作・場面', record.operation], ['期待する動作', record.expectation]]) details.append(el('dt', {}, label), el('dd', {}, value || 'まだ分かっていません'));
   summary.append(details);
   const names = record.related_object_ids.map(id => concernLabel(findObject(id)));
-  if (names.length) summary.append(el('p', { className: 'note' }, `図の関係箇所：${names.join('、')}。図では枠線で示しています。`));
+  if (names.length) summary.append(el('p', { className: 'note' }, `この相談に関係する部分：${names.join('、')}。図では枠線で示しています。`));
   if (dialogue.claims?.length) {
     const basis = el('details', {}, el('summary', {}, 'コードの記述と根拠'));
     for (const claim of dialogue.claims) {
@@ -331,7 +331,7 @@ function renderDialogue() {
     }
     summary.append(basis);
   }
-  for (const [label, values] of [['まだ分からないこと', record.unknowns], ['あなたから報告された結果', record.reported_observations], ['未実施の改善案', record.improvement_ideas]]) if (values.length) summary.append(el('h4', {}, label), el('ul', {}, values.map(v => el('li', {}, v))));
+  for (const [label, values] of [['まだ分からないこと', record.unknowns], ['あなたが報告した結果', record.reported_observations], ['未実施の改善案', record.improvement_ideas]]) if (values.length) summary.append(el('h4', {}, label), el('ul', {}, values.map(v => el('li', {}, v))));
   if (record.test_plan.length) summary.append(el('h4', {}, 'まだ実行していない検証案'), el('ol', {}, record.test_plan.map(step => el('li', {}, el('p', {}, step.operation), el('p', {}, `期待：${step.expected}`), el('p', {}, `記録するもの：${step.observe}`)))));
   root.append(summary);
   if (record.expectation) {
@@ -348,7 +348,7 @@ function renderDialogue() {
     const earlierProposal = linked && dialogue.history[meta(linked).dialogue_turn - 1]?.record.expectation;
     input.value = existing && record.expectation === earlierProposal ? existing.text : record.expectation;
     const submit = el('button', { type: 'submit', className: 'dads-button', 'data-type': 'solid-fill', 'data-size': 'md' }, existing ? 'この内容で再検証する' : 'この内容を検証する');
-    form.append(el('label', { className: 'system-label', for: inputId }, '検証したい動作を確認する'), input, el('p', { className: 'note' }, '内容は編集できます。未確認事項も一緒に残し、起動方法と観測方法の設定へ進みます。'), submit);
+    form.append(el('label', { className: 'system-label', for: inputId }, '検証する動作'), input, el('p', { className: 'note' }, '内容は編集できます。未確認事項も一緒に残し、起動方法と観測方法の設定へ進みます。'), submit);
     form.addEventListener('submit', e => { e.preventDefault(); if (!input.value.trim() || submit.disabled) return; submit.disabled = true; run(() => handoffDialogue(dialogue, input.value.trim())).finally(() => { submit.disabled = false; }); });
     root.append(form);
   }
@@ -373,7 +373,7 @@ async function handoffDialogue(dialogue, expectation) {
   let check = checkFor(statement);
   if (!check || check.text !== expectation) {
     if (previousCheck) {
-      await change({ op: 'revise_check', check_id: previousCheck.id, text: expectation, origin: `repository-concern:${statementId}`, rule: 'manual_only', dependencies: previousCheck.dependencies }, '会話で整理し直した期待を利用者が確認し、検証内容の版を更新した');
+      await change({ op: 'revise_check', check_id: previousCheck.id, text: expectation, origin: `repository-concern:${statementId}`, rule: 'manual_only', dependencies: previousCheck.dependencies }, '会話で整理し直した確認項目を利用者が確認し、検証内容の版を更新した');
       const updated = state.view.workspace.checks.find(c => c.id === previousCheck.id);
       for (const text of record.unknowns) if (!updated.questions.some(q => q.text === text)) await change({ op: 'add_question', check_id: previousCheck.id, question: { id: id('dialogue-unknown'), text, answer: null, origin: null } }, '整理し直した検証内容へ未確認事項を残した');
     } else {
