@@ -115,7 +115,10 @@ fn recipe(
         launch: Default::default(),
         python: None,
         server: None,
-        containers: Some(ContainerSpec { services }),
+        containers: Some(ContainerSpec {
+            services,
+            egress: Default::default(),
+        }),
         browser: None,
         http: Some(HttpOp {
             service: http_service,
@@ -159,9 +162,74 @@ fn docker_available() -> bool {
 }
 
 #[test]
+#[ignore = "Dockerと固定イメージを使うため、手動・週次の統合試験で実行"]
+fn blocked_egress_keeps_the_target_from_reaching_outside() {
+    if !docker_available() {
+        return;
+    }
+    let spec = ContainerSpec {
+        services: vec![nginx("web", ServiceRole::App)],
+        egress: Egress::Blocked,
+    };
+    let mut session = Session::start("egress-blocked", &spec).unwrap();
+    assert!(session.all_ready());
+    let port = session.port_of("web").unwrap();
+    // ホストの127.0.0.1からはゲートウェイ経由で届く。
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+    let container = String::from_utf8(
+        Command::new("docker")
+            .args(["ps", "-q", "--filter", "label=eel.role=app", "--filter"])
+            .arg("name=eel-egress-blocked-1-web")
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let container = container.trim();
+    assert!(!container.is_empty(), "対象のコンテナが見つかりません");
+    // 対象のコンテナから外部のIPへ接続できない。
+    let outside = Command::new("docker")
+        .args([
+            "exec",
+            container,
+            "wget",
+            "-q",
+            "-T",
+            "3",
+            "-O",
+            "-",
+            "http://1.1.1.1/",
+        ])
+        .output()
+        .unwrap();
+    assert!(!outside.status.success(), "遮断したはずが外部へ接続できた");
+    // 権限を絞っている。
+    let caps = Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}}",
+            container,
+        ])
+        .output()
+        .unwrap();
+    let caps = String::from_utf8_lossy(&caps.stdout);
+    assert!(
+        caps.contains("ALL") && caps.contains("no-new-privileges"),
+        "{caps}"
+    );
+    let phase = session.snapshot();
+    assert_eq!(phase.egress, "blocked");
+    assert!(phase.egress_confirmed);
+    let leftovers = session.cleanup().unwrap();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
 fn tag_without_digest_is_rejected() {
     let mut spec = ContainerSpec {
         services: vec![nginx("web", ServiceRole::App)],
+        egress: Default::default(),
     };
     spec.services[0].image = "nginx:1.27.4-alpine".into();
     assert!(validate_spec(&spec).is_err());
