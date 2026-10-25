@@ -664,10 +664,20 @@ impl Session {
         if !inspect_running(&service.container).ok()? {
             return Some("データベースのコンテナは動いていない".into());
         }
+        let password = service
+            .spec
+            .env
+            .get("MYSQL_ROOT_PASSWORD")
+            .or_else(|| service.spec.env.get("MARIADB_ROOT_PASSWORD"));
+        let env = format!("MYSQL_PWD={}", password.map(String::as_str).unwrap_or(""));
         let output = docker(&[
             "exec",
+            "--env",
+            &env,
             &service.container,
             "mariadb",
+            "--user=root",
+            "--connect-timeout=5",
             "-N",
             "-e",
             "SELECT 1",

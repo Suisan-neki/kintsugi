@@ -225,10 +225,16 @@ impl Controller {
             ("node", execution::Runtime::Node),
             ("python3", execution::Runtime::Python3),
             ("http", execution::Runtime::Http),
+            ("browser", execution::Runtime::Browser),
         ]
         .into_iter()
         .map(|(name, runtime)| {
-            let (available, detail) = match execution::runtime_available(&runtime) {
+            let environment = execution::runtime_available(&runtime).and_then(|(path, version)| {
+                if runtime == execution::Runtime::Browser {
+                    crate::container::engine().map(|docker| (path, format!("{version}、Docker {docker}。PlaywrightとChromiumの版は実行時に確認します")))
+                } else { Ok((path, version)) }
+            });
+            let (available, detail) = match environment {
                 Ok((path, version)) => (true, format!("{version}（{}）", path.display())),
                 Err(error) => (false, error),
             };

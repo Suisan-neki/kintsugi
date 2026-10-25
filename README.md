@@ -25,6 +25,7 @@
 3. そのシステムの構成図を見て、要素や接続の説明と根拠を調べます。
 4. 気になる部分についてAIと相談し、疑問・期待・根拠・未確認事項を記録します。
 5. 人が期待する動作を編集し、`/workbench`の検証設定へ進みます。
+   OpenEMRでは同梱のSOAP用ブラウザ試験を選べます。参照版が異なる場合は両方を表示し、人が切り替えてから実行します。
 6. 試行の結果、実際の観測、未確認事項を確認し、改修後の再試験や比較へ進みます。構成図と会話へ戻ることもできます。
 
 図を生成するときはREADMEとコードの抜粋を設定したAIへ送ります。URLを読んだだけでは対象コードを実行しません。AIの説明、対象プログラムによる報告、基盤が直接読み出した結果を区別します。終了コード0だけで業務条件の成立を判定しません。
@@ -110,6 +111,7 @@ npm run test:app
 
 - [構成図とAI接続](docs/repository-architecture.md)
 - [対話と検証への接続](docs/diagram-dialogue.md)
+- [対話の追加読取とブラウザ試験](docs/dialogue-browser-handoff.md)
 - [図の読みやすさとyomiyasu](docs/readable-diagram-and-writing.md)
 - [固定版実行と制約](docs/pinned-execution.md)
 - [医療OSSの固定環境](docs/pinned-environments.md)

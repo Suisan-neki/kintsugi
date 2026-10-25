@@ -496,6 +496,59 @@ mod boundaries {
         );
     }
     #[test]
+    fn inquiry_adds_php_and_templates_from_old_inventory_at_the_same_commit() {
+        use std::sync::Mutex;
+        struct PhpSource(Mutex<Vec<String>>);
+        impl github::Fetch for PhpSource {
+            fn get(&self, url: &str, _: usize) -> io::Result<Vec<u8>> {
+                self.0.lock().unwrap().push(url.into());
+                Ok(b"<?php\nsqlInsert('form_soap', $value);\n".to_vec())
+            }
+        }
+        let source = PhpSource(Mutex::new(vec![]));
+        impl github::Fetch for &PhpSource {
+            fn get(&self, url: &str, limit: usize) -> io::Result<Vec<u8>> {
+                (*self).get(url, limit)
+            }
+        }
+        let paths = [
+            "interface/forms/soap/save.php",
+            "interface/forms/soap/report.php",
+            "interface/forms/soap/templates/soap_form.twig",
+            "vendor/soap.php",
+            "interface/forms/soap/link.php",
+        ];
+        let s = json!({"schema":1,"fullName":"example/project","commit":"a".repeat(40),
+            "inventory":paths.iter().map(|p|json!({"path":p,"mode":if p.ends_with("link.php"){"120000"}else{"100644"}})).collect::<Vec<_>>(),
+            "files":{},"omitted":[]});
+        let r = read_with(
+            ReaderRequest::Inquire {
+                snapshot: s,
+                question: "SOAPを保存して開き直す処理".into(),
+                path: None,
+                line: None,
+            },
+            || Ok(&source),
+            &budget::Budget::new(),
+        )
+        .unwrap();
+        assert_eq!(r["result"]["loaded_files"].as_array().unwrap().len(), 3);
+        assert!(
+            source
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|u| u.contains(&format!("/{}/", "a".repeat(40))))
+        );
+        assert!(r["result"]["findings"].as_array().unwrap().iter().any(|f| {
+            f["refs"]
+                .as_array()
+                .is_some_and(|refs| refs.iter().any(|r| r["path"] == paths[0]))
+        }));
+        assert!(r["result"]["functions"].as_array().unwrap().is_empty());
+    }
+    #[test]
     fn unread_function_is_loaded_and_inquiry_reads_at_most_eight_files() {
         let inventory = (0..12)
             .map(|i| json!({"path":format!("store{i}.js"),"mode":"100644","size":30}))

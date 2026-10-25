@@ -31,6 +31,9 @@ const METHODS = [
   ['server_output', '先に起動するプロセスの出力', '先に起動するプロセス（受信側など）の出力'],
   ['container_log', 'コンテナのログ', 'コンテナのログ（対象の応答とは別）'],
   ['database_query', 'データベースの直接読み出し', '麦漆がデータベースを直接読み出した結果'],
+  ['browser_text', 'ブラウザの表示', 'ブラウザから読み取った表示'],
+  ['browser_response', 'ブラウザのHTTP応答', '操作中に観測したHTTP応答'],
+  ['database_rows', 'データベースの行', '麦漆がデータベースから直接読み出した行'],
 ];
 const SCOPES = ['受付', '書き込み', '後からの読み出し', '終了コードで失敗が分かる', 'エラー表示で失敗が分かる', '受信側のエラー'];
 const UNANALYZED = '解析に対応していない種類（未対応の言語、画像、設定など）';
@@ -460,6 +463,10 @@ async function loadCase() {
     const execution = await api('GET', '/api/v1/execution');
     if (state.view && view.workspace.revision < state.view.workspace.revision) return;
     state.view = view; state.execution = execution;
+    if (!state.browserRecipes) {
+      try { state.browserRecipes = (await api('GET', '/api/v1/browser-recipes')).recipes; }
+      catch (e) { state.browserRecipesError = e.message; }
+    }
   } catch (e) { showError(e); }
   renderCurrent();
   if (['open', 'repository'].includes(state.step)) $('current').hidden = true;
@@ -691,6 +698,7 @@ function lastRecipe(checkId) {
 }
 function recipeToForm(r) {
   return { entrypoint: r.entrypoint, launch: r.launch || 'file', runtime: r.runtime, args: r.args, storage: r.trial.storage || '', timeout_ms: r.timeout_ms, fault: r.trial.fault,
+    browser_recipe: r.runtime === 'browser' ? structuredClone(r) : null,
     readback: r.trial.readback ? { launch: 'file', ...r.trial.readback } : null, python_root: r.python?.root || '',
     dependencies_text: (r.python?.dependencies || []).map(d => [d.repository, d.commit, d.root].filter(Boolean).join(' ')).join('\n'),
     server: r.server ? { launch: 'file', ...r.server } : null,
@@ -742,7 +750,7 @@ function renderTrial() {
   const notes = [];
   if (!plan) notes.push(h('p', {}, '試験の準備に使う情報を読み込んでいます。'));
   else if (plan.error) notes.push(banner('error', '試験の準備に使う情報を作れませんでした', h('p', {}, plan.error)));
-  else if (!plan.executable) notes.push(banner('warning', 'この対象の実行は未対応です', h('p', {}, plan.unsupported_reason), h('p', {}, '理解と試験の計画は表示できますが、麦漆では起動しません。')));
+  else if (!plan.executable && state.trialForm?.runtime !== 'browser' && !browserPresets().length) notes.push(banner('warning', 'この対象の実行は未対応です', h('p', {}, plan.unsupported_reason), h('p', {}, '理解と試験の計画は表示できますが、麦漆では起動しません。')));
   const header = [field({ label: '検証する動作', control: pick }), checks.length ? null : h('p', {}, '先に「検証する動作を決める」で確認項目を登録してください。')];
   if (!check) { fill(body, header, notes); return; }
   if (!check.source) notes.push(banner('warning', 'コードとの対応づけがありません', h('p', {}, '試験の結果をコードへたどれるように、先に「実装と確認方法を対応づける」でコードの行を選んでください。'), button('確認項目を開く', () => goto('expect'))));
@@ -751,8 +759,73 @@ function renderTrial() {
   state.trialForm = form;
   fill(body, header, notes,
     h('p', {}, h('strong', {}, '検証する動作: '), check.text),
+    state.step === 'trial' ? browserPresetPicker(check) : null,
     plan && !plan.error ? disclosure('コードから読み取った試験の手がかり', planInfo(plan)) : null,
-    trialFormView(check, form, plan, exec));
+    form.runtime === 'browser' ? browserTrialView(check, form, exec)
+      : browserPresets().length ? disclosure('Python・Node.js・HTTPを手動で設定する', trialFormView(check, form, plan, exec)) : trialFormView(check, form, plan, exec));
+}
+function browserPresets() {
+  return (state.browserRecipes || []).filter(p => p.recipe.source.repository === state.source?.repository);
+}
+function browserPresetPicker(check) {
+  const presets = browserPresets();
+  if (state.browserRecipesError) return banner('warning', '同梱のブラウザ試験を読み込めませんでした', h('p', {}, state.browserRecipesError));
+  if (!presets.length) return null;
+  return h('section', { class: 'box', 'aria-label': '同梱のブラウザ試験' }, h('h3', {}, 'ブラウザで試す内容を選ぶ'),
+    h('p', {}, '架空の患者を登録し、SOAPの保存・再表示とDBの値を別々に確認します。選択しただけでは実行しません。'),
+    presets.map(p => {
+      const s = p.recipe.source, different = check.source?.commit !== s.commit;
+      return h('div', { class: 'box', 'data-browser-preset': p.id }, h('h4', {}, p.title),
+        h('p', {}, `参照する版: ${s.repository} ${s.commit}`), h('p', { class: 'note' }, p.note),
+        different ? h('p', { class: 'ref-unverified' }, `現在の確認項目の版: ${check.source?.commit || '未設定'}。この試験を選ぶと参照先を上の版へ変更します。元の相談と過去の記録は残ります。`) : null,
+        button(different ? `レシピの版に切り替えて設定する：${p.title}` : `この試験を設定する：${p.title}`, () => guarded(async () => {
+          requirePerson();
+          if (different) {
+            if (!await openRepository('https://github.com/' + s.repository, s.commit, false)) return;
+            await change({ op: 'bind_source', check_id: check.id, source: s }, '同梱のブラウザ試験の固定版を選び、参照先を変更した');
+          }
+          state.checkId = check.id; state.trialForm = recipeToForm(p.recipe);
+          goto('trial'); setStatus('試験の設定を読み込みました。対象はまだ実行していません。');
+        }), 'outlined', 'md'));
+    }));
+}
+function browserRecipeForCheck(check, form) {
+  const recipe = structuredClone(form.browser_recipe);
+  if (!recipe?.browser || recipe.runtime !== 'browser' || !check.source ||
+      recipe.source.repository !== check.source.repository || recipe.source.commit !== check.source.commit)
+    throw Error('ブラウザ試験と確認項目の版が一致しません。試験を選び直してください。');
+  recipe.check_id = check.id; recipe.source = check.source;
+  recipe.criterion = { assertion: 'eel.trial', subject: check.id };
+  return recipe;
+}
+function browserSteps(steps) {
+  const labels = { goto: 'ページを開く', fill: '入力する', click: 'クリックする', select: '選択する',
+    read_text: '表示を読み取る', expand: '開いて表示を確認する', dismiss: '案内を閉じる', read_canvas: '画像を読み取る' };
+  return h('ol', { class: 'items' }, steps.map(s => h('li', {}, `${s.id}：${labels[s.action] || s.action}`,
+    s.action === 'fill' && s.value?.source === 'secret' ? '（試験専用の認証情報を使います）' : '',
+    s.target ? ' ' + (s.target.locator.name || s.target.locator.text || s.target.locator.selector) : '')));
+}
+function browserTrialView(check, form, exec) {
+  const recipe = form.browser_recipe, browser = recipe.browser;
+  const stage = state.step === 'trial-fault' ? 'fault' : state.step === 'trial-checks' ? 'checks' : 'setup';
+  const runtime = exec?.runtimes?.find(r => r.name === 'browser');
+  const submit = button('実行前に確認する', () => showTrialConfirmation(check, form, exec), 'solid-fill', 'lg');
+  submit.disabled = !runtime?.available || recipe.source.commit !== check.source?.commit;
+  return h('section', { 'aria-label': 'ブラウザ試験の設定' },
+    h('h3', {}, 'ブラウザ試験の設定'),
+    h('p', {}, `Chromium ${browser.expected_version}を使います。試験用の新しい環境を作り、終了後に削除します。`),
+    h('p', { class: runtime?.available ? 'note' : 'ref-unverified' }, runtime?.available ? runtime.detail : runtime?.detail || 'ブラウザの実行環境を確認できません。'),
+    h('p', { class: 'note' }, 'Playwrightと指定版のChromium、Docker、運営者が設定した試験用の認証情報が必要です。実行時に不足や版の違いがあればエラーを表示します。'),
+    stage === 'setup' ? [
+      h('h4', {}, '実行するイメージ'), h('ul', { class: 'items' }, recipe.containers.services.map(s => h('li', {}, `${s.name}：${s.image}`))),
+      disclosure('ログインと準備の手順', browserSteps(browser.preparation)),
+      disclosure('試験中の操作', browserSteps(browser.actions)),
+      h('div', { class: 'journey-actions' }, button('確認項目に戻る', () => goto('expect-edit')), button('次へ：試す状況を選ぶ', () => goto('trial-fault'), 'solid-fill', 'md')),
+    ] : stage === 'fault' ? [
+      h('h4', {}, '試す状況'), h('p', {}, FAULT_LABEL[form.fault]),
+      form.fault === 'database_stopped' ? h('p', {}, 'SOAPを入力するところまで準備し、DBを停止してから保存を試します。DBを読めないことを「保存されていない」とは判定しません。') : null,
+      h('div', { class: 'journey-actions' }, button('起動と入力に戻る', () => goto('trial')), button('次へ：判定の条件を確認する', () => goto('trial-checks'), 'solid-fill', 'md')),
+    ] : [previewBox(check, form, exec), h('div', { class: 'journey-actions' }, button('試す状況に戻る', () => goto('trial-fault')), submit)]);
 }
 function planInfo(plan) {
   return h('div', {},
@@ -904,6 +977,19 @@ function showTrialConfirmation(check, form, exec) {
   $('trial').focus(); $('main').scrollIntoView({ block: 'start' });
 }
 function previewBox(check, f, exec) {
+  if (f.runtime === 'browser') {
+    const recipe = browserRecipeForCheck(check, f);
+    return h('div', { class: 'box' }, h('h4', {}, '実行する内容'),
+      h('p', {}, `対象: ${recipe.source.repository} ${recipe.source.commit}`),
+      h('p', {}, `ブラウザ: Chromium ${recipe.browser.expected_version}。故障: ${FAULT_LABEL[recipe.trial.fault]}`),
+      h('p', { class: 'note' }, '参照したGitコミットと実行イメージのコードが同一であることは未確認です。'),
+      h('h4', {}, '実行するイメージ'), h('ul', { class: 'items' }, recipe.containers.services.map(s => h('li', {}, s.image))),
+      disclosure('ログインと準備の手順', browserSteps(recipe.browser.preparation)),
+      disclosure('試験中の操作', browserSteps(recipe.browser.actions)),
+      h('h4', {}, '判定の条件'), h('ul', { class: 'items' }, recipe.trial.checks.map(c => h('li', {},
+        `${c.scope}：${METHODS.find(m => m[0] === c.method)?.[1] || c.method}（${c.target}）に「${c.text}」を${c.expect === 'not_contains' ? '含まない' : '含む'}`))),
+      h('p', {}, '表示・HTTP応答・DBの直接読取を別々に記録します。試行ごとに新しい架空の値を使い、待ち受けは127.0.0.1に限定します。終了後にコンテナと試験データを削除します。'));
+  }
   const commit = check.source?.commit;
   let python = null, pythonError = null;
   try { python = pythonSetup(f); } catch (e) { pythonError = e.message; }
@@ -928,7 +1014,7 @@ function previewBox(check, f, exec) {
 async function runTrial(check, f) {
   await guarded(async () => {
     requirePerson();
-    if (f.runtime !== 'http' && !f.entrypoint) throw Error('起動対象を入力してください。');
+    if (!['http', 'browser'].includes(f.runtime) && !f.entrypoint) throw Error('起動対象を入力してください。');
     if (f.runtime === 'http' && !f.http) throw Error('HTTPの操作先を入力してください。');
     const python = pythonSetup(f);
     const containers = parseContainers(f.containers_text);
@@ -938,11 +1024,12 @@ async function runTrial(check, f) {
     if (f.checks.every(c => c.method === 'exit_code')) throw Error('終了コードだけでは判定しません。終了コード以外の条件を追加してください。');
     const criterion = { assertion: 'eel.trial', subject: check.id };
     let current = currentCheck();
+    if (f.runtime === 'browser') browserRecipeForCheck(current, f);
     if (current.rule !== 'observed_assertion' || JSON.stringify(current.observation) !== JSON.stringify(criterion)) {
       await change({ op: 'configure_observation', check_id: check.id, criterion }, '試験案の判定条件で判定するように設定した');
       current = currentCheck();
     }
-    const recipe = { schema_version: 1, check_id: check.id, source: current.source, runtime: f.runtime, launch: f.launch, entrypoint: f.runtime === 'http' ? (f.http?.path || '/') : f.entrypoint, args: f.args, input: {}, criterion, timeout_ms: f.timeout_ms,
+    const recipe = f.runtime === 'browser' ? browserRecipeForCheck(current, f) : { schema_version: 1, check_id: check.id, source: current.source, runtime: f.runtime, launch: f.launch, entrypoint: f.runtime === 'http' ? (f.http?.path || '/') : f.entrypoint, args: f.args, input: {}, criterion, timeout_ms: f.timeout_ms,
       python, server: f.server, containers, http: f.http,
       trial: { schema_version: 1, fault: f.fault, storage: f.storage || null, readback: f.readback, checks: f.checks.map((c, i) => ({ id: `c${i + 1}`, scope: c.scope, method: c.method, expect: c.expect, text: c.method === 'exit_code' ? null : c.text, target: c.target || null })) } };
     setStatus(`固定コミット ${shortCommit(current.source.commit)} を試験用に取得しています（git fetch のみ。まだ実行しません）。`);
@@ -1024,6 +1111,7 @@ function evidenceCard(check, v, e) {
       s.dependencies?.length ? h('p', {}, h('strong', {}, '依存先: '), s.dependencies.join('、'), '（固定コミットの読み込み先だけを複製。インストールはしていない）') : null,
       s.server ? h('p', {}, h('strong', {}, '先に起動するプロセス: '), s.server.started ? `${s.server.detail}。${s.server.exited_before_stop ? `麦漆が止める前に終了していた（終了コード ${s.server.exit_code ?? 'なし'}）` : s.server.stopped_by_platform ? '操作の後に麦漆が止めた' : ''}` : s.server.detail) : null,
       s.containers ? h('p', {}, h('strong', {}, '試験専用コンテナ: '), s.containers.services.map(x => `${x.name}（${x.ready ? `${x.ready_after_ms}msで準備` : '準備できず'}、127.0.0.1:${x.port}）`).join('、'), s.containers.leftovers?.length ? `。残った資源: ${s.containers.leftovers.join('、')}` : '。試行の後に消した') : null,
+      s.containers?.browser ? h('p', {}, h('strong', {}, 'ブラウザの実行: '), s.containers.browser.completed ? '記録した操作が完了した。' : s.containers.browser.prepared ? '準備はできたが、操作は完了していない。' : '準備できていない。', ' ', s.containers.browser.detail) : null,
       h('figure', { class: 'dads-table' }, h('figcaption', { class: 'dads-table__caption' }, '条件ごとの判定結果'),
         h('table', { class: 'dads-table__table', 'data-cell-border': 'bottom' },
           h('thead', {}, h('tr', {}, ['確認する範囲', '期待する結果', '観測した結果', '記録の取得元', '詳細'].map(t => h('th', { class: 'dads-table__col-header', scope: 'col' }, t)))),
@@ -1064,6 +1152,7 @@ function evidenceCard(check, v, e) {
 }
 /// 起動したもののコードへのリンク。モジュール・コマンドは、麦漆が解決した固定版の中のファイルへつなぐ。
 function launchLinks(trace) {
+  if (trace.recipe.runtime === 'browser') return ' と、記録したブラウザの操作手順';
   const source = trace.recipe.source;
   const resolved = trace.python?.launches || [];
   const starts = [['operate', '起動したもの', trace.recipe.launch || 'file', trace.recipe.entrypoint], ...(trace.recipe.server ? [['wait', '先に起動するプロセス', trace.recipe.server.launch || 'file', trace.recipe.server.entrypoint]] : [])];
@@ -1182,8 +1271,14 @@ if (params.get('url')) { $('repo-url').value = params.get('url'); $('repo-ref').
 
 
 if (params.get('from') === 'system' && params.get('url')) {
+  // 検証対象のrefを切り替えても、元の図・会話の版を保持する。
+  const systemRef = params.get('system_ref') || params.get('ref') || '';
+  if (!params.has('system_ref')) {
+    const current = new URL(location.href); current.searchParams.set('system_ref', systemRef);
+    history.replaceState(null, '', current);
+  }
   const back = new URL('/', location.origin);
-  back.searchParams.set('url', params.get('url')); back.searchParams.set('ref', params.get('ref') || '');
+  back.searchParams.set('url', params.get('url')); back.searchParams.set('ref', systemRef);
   if (params.get('focus')) back.searchParams.set('focus', params.get('focus'));
   if (params.get('diagram')) back.searchParams.set('diagram', params.get('diagram'));
   $('back-to-system').href = back.pathname + back.search;

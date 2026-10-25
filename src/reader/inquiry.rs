@@ -445,6 +445,18 @@ pub fn inquire(s: &Snapshot, m: &Model<'_>, question: &str, focus: Option<(&str,
         let mut hit = false;
         let lower = word.to_lowercase();
         for f in &m.files {
+            if rx!(r"(?i)\.(php|twig|sql)$").is_match(&f.path)
+                && f.path.to_lowercase().contains(&lower)
+            {
+                // 構文解析に未対応の本文も、実際に読んだ行をAIの根拠へ渡す。
+                let count = f.text.lines().count();
+                let refs: Vec<_> = (1..=count.min(240))
+                    .step_by(80)
+                    .map(|start| reference(&f.path, start, (start + 79).min(count)))
+                    .collect();
+                findings.push(json!({"intent":"path","text":format!("質問の「{word}」をパスに含む本文: {}。処理の意味と実行時の動作は未確認",f.path),"kind":"code","refs":refs}));
+                hit = true;
+            }
             for fun in functions(f)
                 .iter()
                 .filter(|fun| fun["short"] == *word || fun["name"] == *word)
@@ -516,9 +528,14 @@ pub fn inquire(s: &Snapshot, m: &Model<'_>, question: &str, focus: Option<(&str,
         paths.extend(m.files.iter().map(|f| f.path.clone()));
     }
     let unread = s
-        .omitted
+        .inventory
         .iter()
-        .filter(|o| o.reason == "初回の読取範囲外")
+        .filter(|e| {
+            !s.files.contains_key(&e.path)
+                && snapshot::readable(&e.path)
+                && matches!(e.mode.as_str(), "100644" | "100755")
+                && e.size.is_none_or(|n| n <= snapshot::MAX_FILE_BYTES)
+        })
         .map(|o| o.path.as_str())
         .collect::<HashSet<_>>();
     let mut needed = vec![];
@@ -527,6 +544,31 @@ pub fn inquire(s: &Snapshot, m: &Model<'_>, question: &str, focus: Option<(&str,
             needed.push(p.to_owned());
         }
     };
+    // 固有名を含むパスを、一般的な「保存」等の候補より先に調べる。
+    // inventoryも見るので、PHP等を除外していた旧読取記録からも補える。
+    let mut named: Vec<_> = unread
+        .iter()
+        .filter(|p| {
+            words
+                .iter()
+                .any(|w| p.to_lowercase().contains(&w.to_lowercase()))
+        })
+        .copied()
+        .collect();
+    named.sort_by_key(|p| {
+        (
+            snapshot::test_file(p),
+            !words
+                .iter()
+                .any(|w| p.split('/').any(|part| part.eq_ignore_ascii_case(w))),
+            !rx!(r"(?i)\.(php|twig|sql|rs|py|[cm]?[jt]sx?)$").is_match(p),
+            !rx!(r"(?i)(^|/)(save|view|report|new)\.").is_match(p),
+            p.to_string(),
+        )
+    });
+    for p in named {
+        add(p);
+    }
     for e in &m.edges {
         if paths.contains(string(&e["from"])) && unread.contains(string(&e["to"])) {
             add(string(&e["to"]));

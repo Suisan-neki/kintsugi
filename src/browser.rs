@@ -464,11 +464,19 @@ impl Session {
             "PLAYWRIGHT_BROWSERS_PATH",
             "EEL_BROWSER_EXECUTABLE",
             "EEL_BROWSER_EXTRA_ARGS",
-            "EEL_BROWSER_SECRETS_FILE",
         ] {
             if let Some(v) = std::env::var_os(key) {
                 cmd.env(key, v);
             }
+        }
+        // 子プロセスの作業場所は試行ごとに変わる。相対パスはサーバーの起動場所で解決する。
+        if let Some(path) = std::env::var_os("EEL_BROWSER_SECRETS_FILE") {
+            cmd.env(
+                "EEL_BROWSER_SECRETS_FILE",
+                fs::canonicalize(path).map_err(|_| {
+                    invalid("EEL_BROWSER_SECRETS_FILEで指定した試験用の秘密値ファイルを読めません")
+                })?,
+            );
         }
         let child = cmd
             .arg(directory.join("runner.mjs"))

@@ -263,7 +263,7 @@ function prepareConcern(card, statement) {
   card.append(form); text.focus();
 }
 function workbenchLink(label, check, m, step) {
-  const href = `/workbench?url=${encodeURIComponent('https://github.com/' + m.repository)}&ref=${encodeURIComponent(check.source?.commit || m.commit)}&check=${encodeURIComponent(check.id)}${m.node ? `&focus=${encodeURIComponent(m.node)}` : ''}${m.model_revision ? `&diagram=${encodeURIComponent(m.model_revision)}` : ''}&from=system#${step}`;
+  const href = `/workbench?url=${encodeURIComponent('https://github.com/' + m.repository)}&ref=${encodeURIComponent(check.source?.commit || m.commit)}&system_ref=${encodeURIComponent(m.commit)}&check=${encodeURIComponent(check.id)}${m.node ? `&focus=${encodeURIComponent(m.node)}` : ''}${m.model_revision ? `&diagram=${encodeURIComponent(m.model_revision)}` : ''}&from=system#${step}`;
   return el('a', { href, className: 'dads-button', 'data-type': 'outline', 'data-size': 'sm' }, label);
 }
 async function restore() {
@@ -316,6 +316,9 @@ function renderDialogue() {
   const history = el('details', { className: 'dialogue-history' }, el('summary', {}, `この部分についての会話（${dialogue.turn}往復）`));
   for (const turn of dialogue.history) history.append(el('p', { className: 'dialogue-user' }, `あなた：${turn.question}`), el('p', { className: 'dialogue-reply' }, turn.answer));
   root.append(history, el('h3', {}, 'AIからの返答'), el('p', { className: 'dialogue-reply' }, dialogue.answer));
+  const sourceRead = dialogue.history.at(-1).source_read;
+  if (sourceRead?.loaded_files?.length) root.append(el('details', {}, el('summary', {}, '今回追加で読んだファイル'), el('ul', {}, sourceRead.loaded_files.map(path => el('li', {}, path)))));
+  if (sourceRead?.failed_files?.length) root.append(el('p', { className: 'ref-unverified' }, `追加で読めなかったファイル：${sourceRead.failed_files.map(f => f.path).join('、')}。この部分は未確認です。`));
   const record = dialogue.record;
   const summary = el('section', { className: 'dialogue-record' }, el('h3', {}, 'ここまでに整理したこと'), el('p', { className: 'note' }, '会話から整理した案です。期待する動作や検証内容を確認してから記録できます。'));
   const details = el('dl', {});

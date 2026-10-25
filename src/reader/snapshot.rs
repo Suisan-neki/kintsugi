@@ -122,6 +122,8 @@ pub fn architecture_priority(p: &str) -> Option<u8> {
 pub fn readable(p: &str) -> bool {
     !rx!(r"(^|/)(node_modules|vendor|target|dist|build|\.git)(/|$)").is_match(p)
         && (source(p)
+            // 本文の読取と、対応言語の静的解析は別。PHP等を解析済みにはしない。
+            || rx!(r"(?i)\.(php|twig|sql)$").is_match(p)
             || readme(p)
             || manifest(p)
             || architecture_config(p)

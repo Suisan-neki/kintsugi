@@ -72,6 +72,10 @@ struct Turn {
     results: Value,
     #[serde(default)]
     writing_policy: Option<Value>,
+    #[serde(default)]
+    source_read: Option<Value>,
+    #[serde(default)]
+    context_digest: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Thread {
@@ -298,11 +302,23 @@ pub fn send(
         ));
     }
     let graph = graph(store, &message.binding)?;
+    let inquiry_result = store.handle(crate::understanding::UnderstandRequest::Inquire {
+        repository: message.binding.repository.clone(),
+        commit: message.binding.commit.clone(),
+        question: message.question.clone(),
+        path: None,
+        line: None,
+    })?;
     let snapshot = store.load(&message.binding.repository, &message.binding.commit)?;
-    let mut inquiry = graph.clone();
+    let source_read = json!({"loaded_files":inquiry_result["result"]["loaded_files"],
+        "failed_files":inquiry_result["result"]["failed_files"],
+        "needed_files":inquiry_result["result"]["needed_files"]});
+    // 質問の根拠を先に入れ、図だけで48KiBを使い切らないようにする。
+    let mut inquiry = json!({"a_question":inquiry_result["result"],"z_graph":graph});
     crate::understanding::verify_refs(&mut inquiry, &snapshot);
     let (code, provided) = crate::ai::excerpts(&snapshot, &inquiry, 48 * 1024);
     let context = json!({"repository":message.binding.repository,"commit":message.binding.commit,"model_revision":message.binding.revision,"selected_element":message.binding.object_id,"architecture":graph,"code_excerpts":code}).to_string();
+    let context_digest = digest(context.as_bytes());
     if context.len() > 128 * 1024 {
         return Err(invalid("図とコードの文脈が128KiBを超えています"));
     }
@@ -330,9 +346,17 @@ pub fn send(
         .rev()
         .map(|t| json!({"question":t.question,"answer":t.answer}))
         .collect();
-    let query = json!({"request_id":request_id,"audience":if message.audience=="developer" {"技術者"}else{"非技術者"},"message":message.question,"previous_record":thread.turns.last().map(|t| &t.record),"history":history,"results":results,"writing_policy":crate::writing::policy(),"writing_policy_source":crate::writing::metadata()});
+    let query = json!({"request_id":request_id,"audience":if message.audience=="developer" {"技術者"}else{"非技術者"},"message":message.question,"previous_record":thread.turns.last().map(|t| &t.record),"history":history,"results":results,"source_read":source_read,"writing_policy":crate::writing::policy(),"writing_policy_source":crate::writing::metadata()});
     let (answer, envelope, remote_id, backend) = if let Some(config) = dify {
-        let remote = if thread.backend == config.identity() {
+        // Difyの初回system_contextを、追加読取後も使い続けない。
+        // ローカルの履歴と整理案はqueryで引き継ぐ。
+        let remote = if thread.backend == config.identity()
+            && thread
+                .turns
+                .last()
+                .and_then(|t| t.context_digest.as_deref())
+                == Some(&context_digest)
+        {
             thread.remote_id.as_deref()
         } else {
             None
@@ -377,6 +401,8 @@ pub fn send(
         claims,
         results,
         writing_policy: Some(crate::writing::metadata()),
+        source_read: Some(source_read),
+        context_digest: Some(context_digest),
     });
     save(&path, &thread)?;
     Ok(public(&thread))
