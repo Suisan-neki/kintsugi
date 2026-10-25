@@ -220,20 +220,22 @@ impl Store {
             .map(|(repository, commit)| self.path(&repository, &commit))
             .transpose()?;
         let key = serde_json::to_string(&request).map_err(io::Error::other)?;
-        if let Some(path) = &source
-            && let Ok(current) = stamp(path)
+        let before = source.as_ref().and_then(|path| stamp(path).ok());
+        if source.is_some()
+            && let Some(current) = before.as_ref()
             && let Some(cached) = self
                 .cache
                 .lock()
                 .map_err(|_| io::Error::other("解析の保存状態を読めません"))?
                 .get(&key)
-            && cached.stamp == current
+            && &cached.stamp == current
         {
             return Ok(cached.result.clone());
         }
         let result = self.handle_uncached(request)?;
         if let Some(path) = source
             && let Ok(current) = stamp(&path)
+            && before.as_ref() == Some(&current)
         {
             let mut cache = self
                 .cache

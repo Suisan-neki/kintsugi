@@ -1,5 +1,6 @@
 // Prepare a request from existing evidence. This tool never starts an app or sends the request.
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -51,13 +52,10 @@ export function loadWorkspace(location) {
     return value.workspace || value;
   }
   check(!fs.existsSync(path.join(location, 'restore.pending')), '復元が完了していません');
-  const revisions = path.join(location, 'revisions');
-  const files = fs.readdirSync(revisions).filter(file => /^\d{20}\.json$/.test(file)).sort();
-  check(files.length, '事例の保存済みの版がありません');
-  const name = files.at(-1);
-  const workspace = readJson(path.join(revisions, name));
-  check(BigInt(workspace.revision) === BigInt(name.slice(0, 20)), '事例の版とファイル名が一致しません');
-  return workspace;
+  const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+  const binary=process.env.REVIEW_BINARY||path.join(root,'target/debug/mugiurushi');
+  const result=execFileSync(binary,['case','show',path.resolve(location)],{encoding:'utf8',maxBuffer:256*1024*1024,stdio:['ignore','pipe','pipe']});
+  return JSON.parse(result).workspace;
 }
 
 export function buildRequest(input, workspace, environment = null) {

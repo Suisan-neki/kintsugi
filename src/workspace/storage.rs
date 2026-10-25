@@ -338,6 +338,7 @@ pub(super) fn load(directory: &Path, revision: Option<u64>) -> io::Result<Worksp
         ));
     }
     let connection = open(directory)?;
+    connection.execute_batch("BEGIN DEFERRED").map_err(sql)?;
     let latest: Option<i64> = connection
         .query_row("SELECT MAX(revision) FROM revisions", [], |r| r.get(0))
         .map_err(sql)?;
@@ -472,5 +473,64 @@ mod tests {
         fs::rename(case.0.join("revisions"), case.0.join("legacy-backup")).unwrap();
         assert_eq!(workspace::load(&case.0).unwrap().revision, 2);
         assert_eq!(crate::backup::snapshot(&case.0).unwrap().revisions.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod concurrent_tests {
+    use super::*;
+    #[test]
+    fn readers_observe_one_committed_revision_during_updates() {
+        let path = std::env::temp_dir().join(format!(
+            "mugiurushi-sqlite-concurrent-{}",
+            std::process::id()
+        ));
+        crate::workspace::initialize(
+            &path,
+            crate::workspace::empty_workspace("test".into(), "合成の並行更新".into()),
+            "合成",
+            "初期化",
+        )
+        .unwrap();
+        let barrier = std::sync::Barrier::new(5);
+        let finished = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                for revision in 1..=30 {
+                    crate::workspace::change(
+                        &path,
+                        crate::workspace::ChangeRequest {
+                            expected_revision: revision,
+                            actor: "合成".into(),
+                            reason: "並行更新".into(),
+                            action: crate::workspace::Change::SetContext {
+                                key: "revision".into(),
+                                value: (revision + 1).to_string(),
+                            },
+                        },
+                    )
+                    .unwrap();
+                }
+                finished.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    let mut count = 0;
+                    while !finished.load(std::sync::atomic::Ordering::SeqCst) || count < 50 {
+                        let workspace = crate::workspace::load(&path).unwrap();
+                        if workspace.revision > 1 {
+                            assert_eq!(
+                                workspace.context["revision"],
+                                workspace.revision.to_string()
+                            );
+                        }
+                        count += 1;
+                    }
+                });
+            }
+        });
+        fs::remove_dir_all(path).unwrap();
     }
 }

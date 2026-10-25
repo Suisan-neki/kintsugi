@@ -43,9 +43,9 @@ const spec={service:'web',tls:false,start_path:'/',expected_version:version,
 const secretsPath=join(temp,'secrets.json');await writeFile(secretsPath,JSON.stringify({user:'synthetic-operator-secret',password:'synthetic-password-secret'}),{mode:0o600});
 const live=new Set();
 async function waitFile(file,child){for(let i=0;i<1000;i++){if(await stat(file).then(()=>true,()=>false))return JSON.parse(await readFile(file,'utf8'));if(child.exitCode!==null)throw Error('runner stopped without '+file);await new Promise(r=>setTimeout(r,20));}throw Error('runner timed out');}
-async function run(name,config,fault=false,timeout_ms=10000){const dir=join(temp,name);await mkdir(dir);const run_id='synthetic-'+name;
+async function run(name,config,fault=false,timeout_ms=10000,overrides={}){const dir=join(temp,name);await mkdir(dir);const run_id='synthetic-'+name;
  await writeFile(join(dir,'request.json'),JSON.stringify({schema_version:1,spec:config,run_id,test_value:run_id,origin,origins:[origin],timeout_ms}));
- const child=spawn(process.execPath,[join(root,'tools/browser-runner.mjs'),join(dir,'request.json')],{env:{...process.env,EEL_PLAYWRIGHT_MODULE:join(root,'node_modules/playwright/index.mjs'),EEL_PNGJS_MODULE:join(root,'node_modules/pngjs/lib/png.js'),EEL_BROWSER_SECRETS_FILE:secretsPath},stdio:'pipe'});live.add(child);let stderr='';child.stderr.on('data',d=>stderr+=d);child.stdout.resume();
+ const child=spawn(process.execPath,[join(root,'tools/browser-runner.mjs'),join(dir,'request.json')],{env:{...process.env,EEL_PLAYWRIGHT_MODULE:join(root,'node_modules/playwright/index.mjs'),EEL_PNGJS_MODULE:join(root,'node_modules/pngjs/lib/png.js'),EEL_BROWSER_SECRETS_FILE:secretsPath,...overrides},stdio:'pipe'});live.add(child);let stderr='';child.stderr.on('data',d=>stderr+=d);child.stdout.resume();
  const exit=new Promise(r=>child.once('exit',r));
  const ready=await waitFile(join(dir,'ready.json'),child);
  if(ready.prepared){assert.equal(requests.filter(p=>p==='/save').length,0);if(fault)database=false;await writeFile(join(dir,'continue.json'),JSON.stringify({run_id,proceed:true}));}
@@ -70,5 +70,14 @@ try {
  requests=[];const dismissed=await run('dismiss-transition',dismissSpec);assert.equal(dismissed.prepared,true,JSON.stringify(dismissed));assert.equal(dismissed.completed,true);assert.match(dismissed.steps[0].detail,/クリックを2回実行した.*非表示を確認した/);assert.equal(dismissed.steps[1].text,'2');assert.equal(requests.filter(p=>p==='/save').length,1);
  requests=[];const stuck=await run('dismiss-stuck',{...dismissSpec,start_path:'/dismiss-stuck'});assert.equal(stuck.prepared,false);assert.equal(stuck.completed,false);assert.equal(stuck.steps.length,1);assert.match(stuck.steps[0].detail,/クリックを3回実行した/);assert(!stuck.steps[0].detail.includes('非表示を確認した'));assert.equal(stuck.steps[0].screenshot,'browser/preparation-dismiss-notice.png');assert.equal(requests.filter(p=>p==='/save').length,0);
  requests=[];const unauthorized=await run('dismiss-action',{...dismissSpec,preparation:[],actions:[dismissStep]});assert.equal(unauthorized.completed,false);assert.match(unauthorized.steps[0].detail,/準備中だけ/);assert.equal(requests.filter(p=>p==='/save').length,0);
- console.log(JSON.stringify({version,checks:['preparation precedes fault','successful display with absent stored data','action HTTP attribution','secrets redacted','external request blocked','partial step retained','failure photo after action deadline','preparation failure does not start actions','secret fill failure has no photo','version mismatch rejected','canvas pixels exclude a gradient HTML overlay','dismissal confirms hidden after opening transition','only dismissal retries at most three times','failed dismissal prevents target actions','dismissal rejected outside preparation']}));
+ // 起動プロトコルへ応答しないChromiumを使い、起動中の期限切れでも別グループの子が残らないことを確かめる。
+ const fakeChrome=join(temp,'unresponsive-chromium'),pidFile=join(temp,'chromium.pid');
+ const quoted="'"+pidFile.replaceAll("'","'\\''")+"'";
+ await writeFile(fakeChrome,'#!/bin/sh\nprintf \'%s\' "$$" > '+quoted+'\nexec sleep 30\n',{mode:0o700});
+ requests=[];
+ const startup=await run('startup-timeout',{...spec,preparation:[],actions:[]},false,500,{EEL_BROWSER_EXECUTABLE:fakeChrome});
+ assert.equal(startup.prepared,false);assert.equal(startup.completed,false);
+ const chromiumPid=Number(await readFile(pidFile,'utf8'));assert.ok(Number.isSafeInteger(chromiumPid)&&chromiumPid>0);
+ assert.throws(()=>process.kill(chromiumPid,0),error=>error.code==='ESRCH','a detached Chromium process survived startup timeout');
+ console.log(JSON.stringify({version,checks:['preparation precedes fault','successful display with absent stored data','action HTTP attribution','secrets redacted','external request blocked','partial step retained','failure photo after action deadline','preparation failure does not start actions','secret fill failure has no photo','version mismatch rejected','canvas pixels exclude a gradient HTML overlay','dismissal confirms hidden after opening transition','only dismissal retries at most three times','failed dismissal prevents target actions','dismissal rejected outside preparation','startup timeout stops detached Chromium']}));
 } finally {for(const child of live)child.kill('SIGKILL');await new Promise(r=>server.close(r));await rm(temp,{recursive:true,force:true});}

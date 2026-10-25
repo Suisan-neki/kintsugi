@@ -548,7 +548,12 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = fs::write(self.directory.join("stop"), b"stop");
-        for _ in 0..80 {
+        for attempt in 0..80 {
+            // PlaywrightはChromiumを別グループで起動する。起動完了前も
+            // SIGTERMのハンドラーで回収させ、2回目は終了を強制する。
+            if matches!(attempt, 0 | 20) {
+                let _ = crate::process::terminate(&mut self.child);
+            }
             if self.child.try_wait().ok().flatten().is_some() {
                 return;
             }

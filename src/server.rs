@@ -104,10 +104,12 @@ pub fn wait_ready(child: &mut Child, port: u16, timeout_ms: u64) -> io::Result<R
 /// 操作の後に待つプロセスを止める。自分で終了していたかどうかと終了コードを返す。
 pub fn stop(child: &mut Child) -> io::Result<(bool, Option<i32>)> {
     let before = child.try_wait()?;
-    crate::process::kill_group(child)?;
     if let Some(status) = before {
         return Ok((true, status.code()));
     }
+    crate::process::kill_group(child)?;
+    // 公開APIには専用グループを作っていないChildも渡せる。
+    child.kill()?;
     Ok((false, child.wait()?.code()))
 }
 
@@ -137,5 +139,31 @@ mod tests {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).expect("待ち受け");
         assert!(listening(port));
         drop(listener);
+    }
+}
+
+#[cfg(test)]
+mod stop_tests {
+    #[test]
+    fn stop_accepts_a_child_without_a_dedicated_group() {
+        let child = std::process::Command::new("sh")
+            .args(["-c", "exec sleep 30"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let mut child = child;
+            tx.send(super::stop(&mut child)).unwrap();
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(2));
+        if result.is_err() {
+            // SAFETY: 待機中の所有する子を、失敗した試験でも残さない。
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
+        handle.join().unwrap();
+        assert!(!result.unwrap().unwrap().0);
     }
 }

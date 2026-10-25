@@ -284,7 +284,7 @@ fn review_reports_require_v1_auth_and_reject_a_stale_preview() {
         );
     }
     for route in ["/api/report", "/api/report-html"] {
-        assert!(http(&case, "GET", route, "", None, None, None).starts_with("HTTP/1.1 403"));
+        assert!(http(&case, "GET", route, "", None, None, None).starts_with("HTTP/1.1 410"));
     }
     assert!(
         http(

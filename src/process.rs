@@ -43,6 +43,22 @@ pub(crate) fn kill_group(child: &mut Child) -> io::Result<()> {
     Ok(())
 }
 
+/// Playwright等の管理プロセスに、分離した子の終了処理を行わせる。
+pub(crate) fn terminate(child: &mut Child) -> io::Result<()> {
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
+    let pid = i32::try_from(child.id()).map_err(io::Error::other)?;
+    // SAFETY: まだ回収していない所有する子の正のPIDだけを指定する。
+    if unsafe { libc::kill(pid, libc::SIGTERM) } == -1 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         // 親が先に正常終了していても、同じグループの子孫を止める。
