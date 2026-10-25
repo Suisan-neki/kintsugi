@@ -129,6 +129,55 @@ pub struct TrialSpec {
     #[serde(default)]
     pub readback: Option<Readback>,
     pub checks: Vec<TrialCheck>,
+    /// 故障を解除して、復旧後の状態を読み直す。DB・ボリューム・ネットワークの故障だけに使える。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<Recovery>,
+}
+
+/// 故障の解除と、復旧後の読み直し。判定（採用の可否）には使わず、故障中との違いを記録する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Recovery {
+    /// 解除した後、各コンテナが準備できるまで待つ上限（ミリ秒）。
+    pub ready_timeout_ms: u64,
+}
+
+/// 復旧後に各コンテナが準備できたか。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveredService {
+    pub name: String,
+    pub ready: bool,
+    pub ready_after_ms: Option<u64>,
+    pub detail: String,
+}
+
+/// 故障中と復旧後に、同じ読み出しを行った結果の違い。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateChange {
+    pub id: String,
+    /// database_rows か http_read。
+    pub source: String,
+    pub during_fault: String,
+    pub after_recovery: String,
+    pub rows_during_fault: Option<usize>,
+    pub rows_after_recovery: Option<usize>,
+    /// not_observed・readable_after_recovery・unreadable_after_recovery・unchanged・rows_added・rows_removed・changed。
+    pub change: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryOutcome {
+    pub attempted: bool,
+    /// 解除を実行し、解除後の状態を基盤が確かめられたか。
+    pub effective: bool,
+    pub applied: String,
+    pub services: Vec<RecoveredService>,
+    /// 復旧後に基盤がDBへ送った`SELECT 1`の結果。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_query: Option<String>,
+    pub changes: Vec<StateChange>,
+    /// この比較で分かることと、分からないこと。
+    pub limits: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -181,6 +230,89 @@ pub struct TrialOutcome {
     pub server: Option<crate::server::ServerPhase>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub containers: Option<crate::container::ContainerPhase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryOutcome>,
+}
+
+fn row_count(text: &str) -> usize {
+    text.lines().filter(|l| !l.trim().is_empty()).count()
+}
+
+/// 故障中と復旧後のDB行・HTTP読取を、同じ識別子どうしで比べる。読めなかった状態を「行がない」とは扱わない。
+pub fn compare_state(
+    database_before: &[crate::browser::DatabaseRead],
+    database_after: &[crate::browser::DatabaseRead],
+    http_before: &[crate::http_probe::HttpRead],
+    http_after: &[crate::http_probe::HttpRead],
+) -> Vec<StateChange> {
+    let mut changes = vec![];
+    for before in database_before {
+        let after = database_after.iter().find(|a| a.id == before.id);
+        let (during, now) = (
+            before.performed && before.exit_code.is_none(),
+            after.is_some_and(|a| a.performed && a.exit_code.is_none()),
+        );
+        let rows_during = during.then(|| row_count(&before.text));
+        let rows_after = after.filter(|_| now).map(|a| row_count(&a.text));
+        let change = match (during, now) {
+            (false, false) => "not_observed",
+            (false, true) => "readable_after_recovery",
+            (true, false) => "unreadable_after_recovery",
+            (true, true) => {
+                let after_text = after.map_or("", |a| a.text.as_str());
+                if before.text == after_text {
+                    "unchanged"
+                } else if rows_after > rows_during {
+                    "rows_added"
+                } else if rows_after < rows_during {
+                    "rows_removed"
+                } else {
+                    "changed"
+                }
+            }
+        };
+        changes.push(StateChange {
+            id: before.id.clone(),
+            source: "database_rows".into(),
+            during_fault: before.detail.clone(),
+            after_recovery: after.map_or("復旧後の読み出しがない".into(), |a| {
+                a.detail.clone()
+            }),
+            rows_during_fault: rows_during,
+            rows_after_recovery: rows_after,
+            change: change.into(),
+        });
+    }
+    for before in http_before {
+        let after = http_after.iter().find(|a| a.id == before.id);
+        let during = before.performed && before.status.is_some();
+        let now = after.is_some_and(|a| a.performed && a.status.is_some());
+        let change = match (during, now) {
+            (false, false) => "not_observed",
+            (false, true) => "readable_after_recovery",
+            (true, false) => "unreadable_after_recovery",
+            (true, true) => {
+                let a = after.expect("復旧後の読み出し");
+                if (before.status, &before.sha256) == (a.status, &a.sha256) {
+                    "unchanged"
+                } else {
+                    "changed"
+                }
+            }
+        };
+        changes.push(StateChange {
+            id: before.id.clone(),
+            source: "http_read".into(),
+            during_fault: format!("状態{:?}。{}", before.status, before.detail),
+            after_recovery: after.map_or("復旧後の読み出しがない".into(), |a| {
+                format!("状態{:?}。{}", a.status, a.detail)
+            }),
+            rows_during_fault: None,
+            rows_after_recovery: None,
+            change: change.into(),
+        });
+    }
+    changes
 }
 
 pub fn validate(
@@ -273,6 +405,21 @@ pub fn validate(
             return Err(invalid(
                 "コンテナのログとデータベースの直接読み出しには、コンテナが必要です",
             ));
+        }
+    }
+    if let Some(recovery) = &spec.recovery {
+        if !matches!(
+            spec.fault,
+            TrialFault::DatabaseStopped
+                | TrialFault::DatabaseUnreachable
+                | TrialFault::VolumeReadOnly
+        ) {
+            return Err(invalid(
+                "復旧後の読み直しは、データベースの停止・切断・読み取り専用の故障だけに使えます",
+            ));
+        }
+        if !(1..=crate::container::MAX_READY_MS).contains(&recovery.ready_timeout_ms) {
+            return Err(invalid("復旧後の待機上限は1〜300000ミリ秒です"));
         }
     }
     if spec.fault == TrialFault::ServerNotStarted && !has_server {
@@ -666,6 +813,14 @@ pub fn assess(
         ],
         next_action: String::new(),
     };
+    if let Some(recovery) = &outcome.recovery
+        && !recovery.effective
+    {
+        result.unconfirmed.push(format!(
+            "復旧後の状態: 故障を解除できたか確認できなかったため、復旧後の読み直しは参考にできない（{}）",
+            recovery.applied
+        ));
+    }
     if !snapshot_unchanged {
         result.reason =
             "試行用の固定版が開始時と終了時で異なり、どのコードの結果か確認できない".into();

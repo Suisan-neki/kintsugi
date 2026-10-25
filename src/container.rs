@@ -961,6 +961,28 @@ impl Session {
     }
 
     pub fn remount_database_read_only(&mut self) -> io::Result<bool> {
+        let index = self.recreate_database(true)?;
+        let probe_path = format!(
+            "{}/.eel-write-probe",
+            self.services[index].spec.volumes[0].path
+        );
+        let writable = self.writable(index, &probe_path);
+        self.services[index].detail = if writable {
+            "保存先のボリュームを読み取り専用で載せ直したが、コンテナ内から書き込めた".into()
+        } else {
+            "保存先のボリュームを読み取り専用で載せ直した".into()
+        };
+        Ok(!writable)
+    }
+
+    fn writable(&self, index: usize, probe_path: &str) -> bool {
+        docker(&["exec", &self.services[index].container, "touch", probe_path])
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// データベースのコンテナを消して、同じボリュームで作り直す。`read_only`なら読み取り専用で載せる。
+    fn recreate_database(&mut self, read_only: bool) -> io::Result<usize> {
         let Some(index) = self
             .services
             .iter()
@@ -1004,24 +1026,94 @@ impl Session {
         for volume in &spec.volumes {
             args.push("--mount".into());
             args.push(format!(
-                "type=volume,source=eel-{}-{},target={},readonly",
-                self.trial, volume.name, volume.path
+                "type=volume,source=eel-{}-{},target={}{}",
+                self.trial,
+                volume.name,
+                volume.path,
+                if read_only { ",readonly" } else { "" }
             ));
         }
         args.push(spec.image.clone());
         args.extend(spec.command.iter().cloned());
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         docker_text(&arg_refs)?;
-        let probe_path = format!("{}/.eel-write-probe", spec.volumes[0].path);
-        let writable = docker(&["exec", &container, "touch", &probe_path])
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        self.services[index].detail = if writable {
-            "保存先のボリュームを読み取り専用で載せ直したが、コンテナ内から書き込めた".into()
-        } else {
-            "保存先のボリュームを読み取り専用で載せ直した".into()
+        Ok(index)
+    }
+
+    /// 故障を解除する。解除後の状態を読み出して確かめ、確かめられた場合だけ`true`を返す。
+    pub fn restore_database(&mut self, fault: crate::trial::TrialFault) -> io::Result<bool> {
+        use crate::trial::TrialFault;
+        let Some(index) = self
+            .services
+            .iter()
+            .position(|s| s.spec.role == ServiceRole::Database)
+        else {
+            return Err(invalid("データベースの役割のコンテナがありません"));
         };
-        Ok(!writable)
+        let (effective, detail) = match fault {
+            TrialFault::DatabaseStopped => {
+                docker_text(&["start", &self.services[index].container])?;
+                let running = inspect_running(&self.services[index].container)?;
+                (running, "データベースのコンテナを起動し直した")
+            }
+            TrialFault::DatabaseUnreachable => {
+                let alias = self.alias(&self.services[index].spec.name);
+                docker_text(&[
+                    "network",
+                    "connect",
+                    "--alias",
+                    &alias,
+                    &self.network,
+                    &self.services[index].container,
+                ])?;
+                let connected = inspect_network(&self.services[index].container, &self.network)?;
+                (connected, "データベースを試験用ネットワークへ接続し直した")
+            }
+            TrialFault::VolumeReadOnly => {
+                let index = self.recreate_database(false)?;
+                let probe_path = format!(
+                    "{}/.eel-write-probe",
+                    self.services[index].spec.volumes[0].path
+                );
+                // 起動直後はまだ受け付けないことがあるため、書き込めるまで短く待つ。
+                let writable = (0..20).any(|_| {
+                    let ok = self.writable(index, &probe_path);
+                    if !ok {
+                        thread::sleep(Duration::from_millis(500));
+                    }
+                    ok
+                });
+                (writable, "保存先のボリュームを書き込み可能で載せ直した")
+            }
+            _ => return Err(invalid("この故障には復旧の操作がありません")),
+        };
+        self.services[index].detail = if effective {
+            format!("{detail}。解除後の状態を確かめた")
+        } else {
+            format!("{detail}が、解除後の状態を確かめられなかった")
+        };
+        Ok(effective)
+    }
+
+    /// 復旧後に、各コンテナが準備できるまで待つ。準備できなかったことも記録する。
+    pub fn settle(&mut self, timeout_ms: u64) -> Vec<crate::trial::RecoveredService> {
+        let timeout = Duration::from_millis(timeout_ms);
+        let mut out = vec![];
+        for service in &mut self.services {
+            let result = wait_ready_for(service, timeout);
+            let (ready, ms, detail) = match result {
+                Ok(ms) => (true, Some(ms), format!("復旧後に準備できた（{ms}ms）")),
+                Err(error) => (false, None, error.to_string()),
+            };
+            service.ready = ready;
+            out.push(crate::trial::RecoveredService {
+                name: service.spec.name.clone(),
+                ready,
+                ready_after_ms: ms,
+                detail,
+            });
+        }
+        out
     }
 
     pub fn query_database(&self) -> Option<String> {
@@ -1313,8 +1405,14 @@ fn pull(image: &str) -> io::Result<String> {
 }
 
 fn wait_ready(running: &Running) -> io::Result<u64> {
+    wait_ready_for(
+        running,
+        Duration::from_millis(running.spec.ready_timeout_ms),
+    )
+}
+
+fn wait_ready_for(running: &Running, timeout: Duration) -> io::Result<u64> {
     let started = Instant::now();
-    let timeout = Duration::from_millis(running.spec.ready_timeout_ms);
     loop {
         if !inspect_running(&running.container)? {
             return Err(io::Error::other(format!(
@@ -1347,7 +1445,7 @@ fn wait_ready(running: &Running) -> io::Result<u64> {
             return Err(io::Error::other(format!(
                 "コンテナ {} が {}ms 以内に準備できなかった: {}",
                 running.spec.name,
-                running.spec.ready_timeout_ms,
+                timeout.as_millis(),
                 logs(&running.container)
             )));
         }

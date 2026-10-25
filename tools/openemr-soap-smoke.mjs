@@ -12,8 +12,8 @@ const caseDir=path.join(output,'case'),spec={schema_version:1,revision:1,id:'ope
 const specFile=path.join(output,'case-spec.json');fs.writeFileSync(specFile,JSON.stringify(spec));let view=cli(['case','init',caseDir,'--file',specFile]);
 const configure=path.join(output,'configure.json');fs.writeFileSync(configure,JSON.stringify({expected_revision:view.workspace.revision,actor:'合成の試験担当',reason:'実行前に観測名と対象を保存',action:{op:'configure_observation',check_id:'openemr',criterion:recipe.criterion}}));view=cli(['case','apply',caseDir,configure]);
 const results=[];
-for(const [label,fault] of [['normal','normal'],['database-stopped','database_stopped'],['retry','normal']]){
- const r=structuredClone(recipe);r.trial.fault=fault;
+for(const [label,fault] of [['normal','normal'],['database-stopped','database_stopped'],['retry','normal'],['database-stopped-recovered','database_stopped']]){
+ const r=structuredClone(recipe);r.trial.fault=fault;if(label.endsWith('-recovered'))r.trial.recovery={ready_timeout_ms:180000};
  if(fault!=='normal'){
   const save=r.browser.actions.findIndex(s=>s.id==='save-soap');assert(save>0);
   r.browser.preparation.push(...r.browser.actions.splice(0,save));r.trial.checks=r.trial.checks.filter(c=>c.id.startsWith('soap-'));
@@ -36,6 +36,14 @@ for(const [label,fault] of [['normal','normal'],['database-stopped','database_st
   for(const c of checks.filter(c=>c.id.endsWith('-row')||c.id.endsWith('-readback')))assert.equal(c.observed,'not_observed',c.id);
   assert(phase.database_reads.every(q=>!q.performed||q.exit_code!==0),'unavailable DB is not an empty row set');
   assert(browser.steps.some(s=>s.id==='save-soap'&&s.phase==='action'),'actually attempted SOAP save after stopping DB');
+ }
+ if(label.endsWith('-recovered')){
+  // 故障中は読めなかった行を、DBを戻した後に読み直す。保存操作はDB停止中に失敗しているため、SOAPの行が増えていないことも確かめる。
+  const recovery=trace.trial.recovery;assert.equal(recovery.attempted,true);assert.equal(recovery.effective,true,recovery.applied);
+  assert(recovery.services.every(x=>x.ready),JSON.stringify(recovery.services));
+  const change=id=>{const c=recovery.changes.find(c=>c.id===id&&c.source==='database_rows');assert(c,id);return c;};
+  for(const id of ['patient','visit'])assert.equal(change(id).change,'readable_after_recovery',id),assert.equal(change(id).rows_after_recovery,1,id+' is not duplicated');
+  assert.equal(change('soap-identity').rows_after_recovery,0,'the SOAP save made during the outage left no row');
  }
  results.push({label,evidence_id:e.id,run_id:e.manifest.correlation.run_id,verdict:view.checks[0].verdict});
 }

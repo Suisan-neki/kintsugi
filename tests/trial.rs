@@ -206,6 +206,7 @@ fn saved(fault: TrialFault, readback: bool) -> TrialSpec {
     }
     TrialSpec {
         schema_version: 1,
+        recovery: None,
         fault,
         storage: Some("notes".into()),
         readback: readback.then(|| Readback {
@@ -219,6 +220,7 @@ fn saved(fault: TrialFault, readback: bool) -> TrialSpec {
 fn failure_reported(fault: TrialFault) -> TrialSpec {
     TrialSpec {
         schema_version: 1,
+        recovery: None,
         fault,
         storage: Some("notes".into()),
         readback: None,
@@ -413,6 +415,7 @@ fn invalid_specs_are_rejected_before_running() {
     let fixture = Fixture::new();
     let only_exit = TrialSpec {
         schema_version: 1,
+        recovery: None,
         fault: TrialFault::Normal,
         storage: None,
         readback: None,
@@ -458,4 +461,80 @@ fn invalid_specs_are_rejected_before_running() {
         };
         assert!(validate_recipe(&recipe).is_err());
     }
+}
+
+fn database_read(
+    id: &str,
+    performed: bool,
+    exit_code: Option<i32>,
+    text: &str,
+) -> mugiurushi::browser::DatabaseRead {
+    mugiurushi::browser::DatabaseRead {
+        id: id.into(),
+        performed,
+        exit_code,
+        text: text.into(),
+        detail: String::new(),
+    }
+}
+
+#[test]
+fn recovery_comparison_never_reads_an_unreadable_state_as_no_rows() {
+    let before = [
+        database_read("patient", false, None, ""),
+        database_read("visit", true, None, "v\t1\n"),
+        database_read("failed", true, Some(1), ""),
+        database_read("soap", true, None, "a\t1\n"),
+        database_read("note", true, None, "a\t1\n"),
+        database_read("dup", true, None, "a\t1\n"),
+        database_read("gone", true, None, "a\t1\nb\t2\n"),
+    ];
+    let after = [
+        database_read("patient", true, None, "p\t1\n"),
+        database_read("visit", true, Some(1), ""),
+        database_read("failed", true, None, "f\t1\n"),
+        database_read("soap", true, None, "a\t1\n"),
+        database_read("note", true, None, ""),
+        database_read("dup", true, None, "a\t1\na\t1\n"),
+        database_read("gone", true, None, "a\t1\n"),
+    ];
+    let changes = compare_state(&before, &after, &[], &[]);
+    let by_id = |id: &str| changes.iter().find(|c| c.id == id).unwrap();
+    // 停止中に読めなかった行は「行がなかった」ではなく「復旧後に読めた」とする。
+    assert_eq!(by_id("patient").change, "readable_after_recovery");
+    assert_eq!(by_id("patient").rows_during_fault, None);
+    assert_eq!(by_id("patient").rows_after_recovery, Some(1));
+    // 失敗した読み出しも同様に、行がないとは扱わない。
+    assert_eq!(by_id("visit").change, "unreadable_after_recovery");
+    assert_eq!(by_id("failed").change, "readable_after_recovery");
+    assert_eq!(by_id("failed").rows_during_fault, None);
+    assert_eq!(by_id("soap").change, "unchanged");
+    assert_eq!(by_id("note").change, "rows_removed");
+    assert_eq!(by_id("dup").change, "rows_added");
+    assert_eq!(by_id("dup").rows_after_recovery, Some(2));
+    assert_eq!(by_id("gone").change, "rows_removed");
+}
+
+#[test]
+fn recovery_is_only_allowed_for_faults_that_can_be_undone() {
+    let mut spec = saved(TrialFault::StorageReadOnly, false);
+    spec.recovery = Some(Recovery {
+        ready_timeout_ms: 1000,
+    });
+    assert!(mugiurushi::trial::validate(&spec, false, true, false, |_| Ok(())).is_err());
+    let mut database = saved(TrialFault::DatabaseStopped, false);
+    database.recovery = Some(Recovery {
+        ready_timeout_ms: 0,
+    });
+    assert!(mugiurushi::trial::validate(&database, false, true, true, |_| Ok(())).is_err());
+    database.recovery = Some(Recovery {
+        ready_timeout_ms: 1000,
+    });
+    assert!(mugiurushi::trial::validate(&database, false, true, true, |_| Ok(())).is_ok());
+    // 復旧を指定しない設定の保存形式は変わらない。
+    assert!(
+        !serde_json::to_string(&saved(TrialFault::Normal, false))
+            .unwrap()
+            .contains("recovery")
+    );
 }

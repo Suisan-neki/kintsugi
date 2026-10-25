@@ -1296,6 +1296,17 @@ pub fn execute_with_dependencies(
         _ => vec![],
     };
     let database_query = session.as_ref().and_then(|s| s.query_database());
+    let acted = browser_report
+        .as_ref()
+        .is_some_and(|r| r.prepared && r.steps.iter().any(|s| s.phase == "action"));
+    let recovery = recover_and_compare(
+        &recipe,
+        fault.as_ref().map(|(_, effective)| *effective),
+        session.as_mut(),
+        acted,
+        &test_value,
+        (&database_reads, &http_reads),
+    );
     let mut container_phase = session.as_ref().map(|s| s.snapshot());
     if let Some(phase) = container_phase.as_mut() {
         phase.database_query = database_query;
@@ -1417,6 +1428,7 @@ pub fn execute_with_dependencies(
                 fault: spec.fault,
                 fault_applied,
                 fault_effective,
+                recovery,
                 readback,
                 state,
                 results,
@@ -2119,4 +2131,69 @@ pub fn prepare_repository(destination: &Path, recipe: &Recipe) -> io::Result<()>
         &destination.join("prepared.json"),
         &serde_json::json!({"schema_version":1,"repository":recipe.source.repository,"commit":recipe.source.commit,"checkout":false,"executed":false}),
     )
+}
+
+/// 故障を解除し、故障中に行った読み出しを同じ条件でもう一度行って比べる。故障を適用できなかった試行では解除しない。
+fn recover_and_compare(
+    recipe: &Recipe,
+    fault_effective: Option<bool>,
+    session: Option<&mut crate::container::Session>,
+    acted: bool,
+    test_value: &str,
+    before: (
+        &[crate::browser::DatabaseRead],
+        &[crate::http_probe::HttpRead],
+    ),
+) -> Option<crate::trial::RecoveryOutcome> {
+    let trial = recipe.trial.as_ref()?;
+    let recovery = trial.recovery?;
+    let mut outcome = crate::trial::RecoveryOutcome {
+        attempted: false,
+        effective: false,
+        applied: String::new(),
+        services: vec![],
+        database_query: None,
+        changes: vec![],
+        limits: "復旧後に読み直せたのは、宣言したDBの行・HTTPの応答・準備確認だけ。故障中に失われた操作の再実行や、実運用での復旧手順の妥当性は確認していない".into(),
+    };
+    let Some(session) = session else {
+        outcome.applied = "試験用コンテナがなく、復旧を実行していない".into();
+        return Some(outcome);
+    };
+    if fault_effective != Some(true) {
+        outcome.applied = "故障を適用できなかったため、復旧を実行していない".into();
+        return Some(outcome);
+    }
+    outcome.attempted = true;
+    match session.restore_database(trial.fault) {
+        Ok(effective) => {
+            outcome.effective = effective;
+            outcome.applied = if effective {
+                "故障を解除し、解除後の状態を確かめた".into()
+            } else {
+                "故障の解除を実行したが、解除後の状態を確かめられなかった".into()
+            };
+        }
+        Err(error) => {
+            outcome.applied = format!("故障の解除に失敗した: {error}");
+            return Some(outcome);
+        }
+    }
+    outcome.services = session.settle(recovery.ready_timeout_ms);
+    outcome.database_query = session.query_database();
+    let (database_after, http_after): (Vec<_>, Vec<_>) = match &recipe.browser {
+        Some(spec) if acted => (
+            spec.database
+                .iter()
+                .map(|q| session.read_database(q, test_value))
+                .collect(),
+            spec.http_reads
+                .iter()
+                .map(|p| crate::http_probe::read(p, session))
+                .collect(),
+        ),
+        _ => (vec![], vec![]),
+    };
+    outcome.changes = crate::trial::compare_state(before.0, &database_after, before.1, &http_after);
+    Some(outcome)
 }
