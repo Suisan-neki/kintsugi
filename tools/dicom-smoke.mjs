@@ -58,7 +58,7 @@ try {
   log('pynetdicom の固定コミットを読んだ');
 
   // 2. 期待を書き、受信した画像を保存するコードに対応づける。
-  await page.getByRole('link', { name: /期待する動作を確認する/ }).click();
+  await page.getByRole('link', { name: /検証する動作を決める/ }).click();
   await as('架空の運用担当', 'operator');
   await page.locator('#expect-text').fill('装置から受け取った画像は、保存先に書き込まれ、後から読み出せる');
   await page.getByRole('button', { name: 'この動作を確かめる' }).click();
@@ -82,15 +82,15 @@ try {
     await page.getByRole('button', { name: '633行目を選ぶ' }).click();
     await page.locator('#code-link').click();
     const card = page.locator(`[data-check="${checkId}"]`);
-    await card.getByLabel('この期待は、どのコードがどう動くことで満たされるか').fill(explain);
+    await card.getByLabel('この動作を実装しているコードと処理内容').fill(explain);
     await card.getByLabel('どう確かめるか（確認の方法）').fill(method);
     await card.getByRole('button', { name: '対応づけを記録' }).click();
     await card.locator('.statement[data-kind="implementation"]').waitFor({ state: 'attached' });
-    const records = card.getByText('期待・説明と確認の記録', { exact: true });
+    const records = card.getByText('確認項目と説明の履歴', { exact: true });
     if (!await records.evaluate(node => node.parentElement.open)) await records.click();
     await card.locator('.statement[data-kind="implementation"]').waitFor();
   };
-  await link(saved, 'storescp の handle_store が、受け取った画像を出力先へ ds.save_as で書き込み、成功したら状態 0x0000 を返す。', '受信サーバーを起動して試験用の画像を送り、送信側の表示、基盤による保存先の読み出し、pydicom での読み出しを確かめる。');
+  await link(saved, 'storescp の handle_store が、受け取った画像を出力先へ ds.save_as で書き込み、成功したら状態 0x0000 を返す。', '受信サーバーを起動して試験用の画像を送り、送信側の表示、麦漆による保存先の読み出し、pydicom での読み出しを確かめる。');
   await link(failure, '書き込みで OSError が起きると、handle_store は状態 0xA700（Out of Resources）を返す。送信側の storescu がそれをどう扱うかは storescu.py の処理による。', '保存先のディレクトリを書き込み不可にして送り、送信側の終了コードと表示、保存先、受信側のエラー表示を確かめる。');
   log('期待2件を apps/common.py の 633行目（ds.save_as）に対応づけた');
 
@@ -98,18 +98,18 @@ try {
   const fill = async ({ fault, checks, server = true, readback = true }) => {
     await page.locator('#steps').getByRole('link', { name: /実際に試す/ }).click();
     const form = page.locator('#trial-body form');
-    for (const title of ['Pythonの読み込み先と依存先（任意）', '先に起動して待つプロセス（任意）', '後から読み出す（任意）']) await form.locator('summary', { hasText: title }).click();
-    await form.getByLabel(/^起動するもの/).fill('pynetdicom');
+    for (const title of ['Pythonの読み込み先と依存先（任意）', '先に起動するプロセス（任意）', '後から読み出す（任意）']) await form.locator('summary', { hasText: title }).click();
+    await form.getByLabel(/^起動対象/).fill('pynetdicom');
     await form.getByLabel('起動のしかた').first().selectOption('module');
     await form.getByLabel('引数', { exact: true }).fill(['storescu', '-v', '127.0.0.1', '{{port}}', SAMPLE].join('\n'));
     await form.getByLabel('保存先', { exact: true }).fill(STORED);
     await form.getByLabel('依存先', { exact: true }).fill(`pydicom/pydicom ${PYDICOM} src`);
-    const wait = form.locator('fieldset', { hasText: '先に起動して待つプロセス' });
-    await wait.getByLabel('待つプロセス', { exact: true }).fill(server ? 'pynetdicom' : '');
+    const wait = form.locator('fieldset', { hasText: '先に起動するプロセス' });
+    await wait.getByLabel('先に起動するプロセス', { exact: true }).fill(server ? 'pynetdicom' : '');
     await wait.getByLabel('起動のしかた').selectOption('module');
-    await wait.getByLabel('待つプロセスの引数').fill(['storescp', '{{port}}', '-ba', '127.0.0.1', '-od', 'received'].join('\n'));
+    await wait.getByLabel('先に起動するプロセスの引数').fill(['storescp', '{{port}}', '-ba', '127.0.0.1', '-od', 'received'].join('\n'));
     const back = form.locator('fieldset', { hasText: '後から読み出す' });
-    await back.getByLabel('読み出しに起動するもの').fill(readback ? 'pydicom' : '');
+    await back.getByLabel('読み出し用の起動対象').fill(readback ? 'pydicom' : '');
     await back.getByLabel('起動のしかた').selectOption('script');
     await back.getByLabel('読み出しの引数').fill(['show', STORED].join('\n'));
     await page.getByRole('button', { name: '次へ：試す状況を選ぶ', exact: true }).click();
@@ -133,7 +133,7 @@ try {
   };
 
   // 通常時。
-  await page.locator(`[data-check="${saved}"]`).getByRole('button', { name: 'この期待を試す' }).click();
+  await page.locator(`[data-check="${saved}"]`).getByRole('button', { name: 'この動作を検証する' }).click();
   await fill({ fault: /故障なし（通常時）/, checks: [
     { scope: '受付', method: 'stderr', expect: 'contains', text: 'Received Store Response (Status: 0x0000 - Success)' },
     { scope: '書き込み', method: 'stored_file', expect: 'contains', text: PATIENT_ID },
@@ -161,8 +161,8 @@ try {
   await shot('result-normal');
 
   // 故障: 保存先のディレクトリを書き込み不可にする。
-  await page.locator('#steps').getByRole('link', { name: /期待する動作を確認する/ }).click();
-  await page.locator(`[data-check="${failure}"]`).getByRole('button', { name: 'この期待を試す' }).click();
+  await page.locator('#steps').getByRole('link', { name: /検証する動作を決める/ }).click();
+  await page.locator(`[data-check="${failure}"]`).getByRole('button', { name: 'この動作を検証する' }).click();
   await fill({ fault: /保存先のディレクトリを書き込み不可にする/, readback: false, checks: [
     { scope: '終了コードで失敗が分かる', method: 'exit_code', expect: 'nonzero' },
     { scope: '送信側の表示で失敗が分かる', method: 'stderr', expect: 'contains', text: 'Failure' },
@@ -183,7 +183,7 @@ try {
 
   // 故障: 受信サーバーを起動しない。
   await page.locator('#steps').getByRole('link', { name: /実際に試す/ }).click();
-  await fill({ fault: /待つプロセス（受信側など）を起動しない/, readback: false, checks: [
+  await fill({ fault: /受信サーバーなどの事前起動を行わない/, readback: false, checks: [
     { scope: '終了コードで失敗が分かる', method: 'exit_code', expect: 'nonzero' },
     { scope: '書き込み', method: 'stored_file', expect: 'not_contains', text: PATIENT_ID },
   ] });

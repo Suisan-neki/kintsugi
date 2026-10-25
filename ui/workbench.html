@@ -24,8 +24,8 @@
       <div><dt>リポジトリ</dt><dd id="current-repository"></dd></div>
       <div><dt>コミット</dt><dd id="current-commit"></dd></div>
       <div><dt>関数</dt><dd id="current-function">未選択</dd></div>
-      <div><dt>期待</dt><dd id="current-check">未選択</dd></div>
-      <div><dt>試行</dt><dd id="current-trial">未実行</dd></div>
+      <div><dt>検証する動作</dt><dd id="current-check">未選択</dd></div>
+      <div><dt>実行</dt><dd id="current-trial">未実行</dd></div>
     </dl>
   </div>
 </div>
@@ -75,7 +75,7 @@
         <a class="step-link" href="#understand"><span class="dads-step-navigation__header"><span class="dads-u-visually-hidden">ステップ</span><span class="dads-step-navigation__number">1</span><span class="dads-step-navigation__title">ソフトウェアを理解する</span></span></a>
       </li>
       <li class="dads-step-navigation__step" data-step="expect">
-        <a class="step-link" href="#expect"><span class="dads-step-navigation__header"><span class="dads-u-visually-hidden">ステップ</span><span class="dads-step-navigation__number">2</span><span class="dads-step-navigation__title">期待する動作を確認する</span></span></a>
+        <a class="step-link" href="#expect"><span class="dads-step-navigation__header"><span class="dads-u-visually-hidden">ステップ</span><span class="dads-step-navigation__number">2</span><span class="dads-step-navigation__title">検証する動作を決める</span></span></a>
       </li>
       <li class="dads-step-navigation__step" data-step="trial">
         <a class="step-link" href="#trial"><span class="dads-step-navigation__header"><span class="dads-u-visually-hidden">ステップ</span><span class="dads-step-navigation__number">3</span><span class="dads-step-navigation__title">実際に試す</span></span></a>
@@ -113,7 +113,7 @@
       </section>
 
       <section id="expect" class="step-panel" aria-labelledby="expect-heading" hidden tabindex="-1">
-        <h2 id="expect-heading" class="dads-u-std-24B-150">2. 期待する動作を確認する</h2>
+        <h2 id="expect-heading" class="dads-u-std-24B-150">2. 検証する動作を決める</h2>
         <div id="expect-body"></div>
       </section>
 
@@ -133,7 +133,7 @@
       <p id="code-meta" class="note"></p>
       <div class="button-row">
         <button id="code-function" class="dads-button" data-type="outline" data-size="sm" type="button">この行の関数を調べる</button>
-        <button id="code-link" class="dads-button" data-type="outline" data-size="sm" type="button">この行を期待に対応づける</button>
+        <button id="code-link" class="dads-button" data-type="outline" data-size="sm" type="button">この行を確認項目に関連づける</button>
         <button id="code-close" class="dads-button" data-type="text" data-size="sm" type="button">閉じる</button>
       </div>
       <div id="code-view" class="code-view" tabindex="0" role="region" aria-label="コードの本文"></div>
