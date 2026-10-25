@@ -32,6 +32,8 @@ DBを止めた場合は、DBから行を読めないことを「行がない」�
 
 `soap-recipe.json`は上の患者・受診を作った後、Subjective、Objective、Assessment、Planへ別々の試験値を入力する。SOAPの保存POST、受診タブを更新した後の4項目、`form_soap`の4列を別条件で観測する。DBの`pid`を患者の`pid`とも照合する。受診との外部キーの照合や署名は含めない。
 
+ログイン、画面操作、画面写真の取得を含む試験全体の待機上限は300秒。手元の実行では150秒の上限に達し、SOAPの保存とDB照合まで進んだが、再読込後の表示は取得できなかった。待機上限を延ばしても、保存・再表示・DB照合の判定条件は変えない。上限へ達した場合は、取得できなかった観測を未確認として残す。
+
 ```sh
 EEL_BROWSER_SECRETS_FILE=/tmp/eel-openemr-secrets.json node tools/openemr-soap-smoke.mjs
 ```
