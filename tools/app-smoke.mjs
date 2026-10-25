@@ -85,7 +85,7 @@ try {
   await page.getByText('入力から保存・送信まで', { exact: true }).click();
   const understand = await page.locator('#understand-body').innerText();
   await writeFile(join(output, 'app-understand.txt'), understand);
-  for (const text of ['読んだ範囲', '目的', '起動のしかたと入口', '主な構成と役割', '入力から保存・送信まで', 'TaskDict.write', 'コードで確認', '作者の説明', '解析の推測'])
+  for (const text of ['読んだ範囲', '目的', '起動のしかたと入口', '主な構成と役割', '入力から保存・送信まで', 'TaskDict.write', '簡易解析', '作者の説明', '解析の推測'])
     assert.ok(understand.includes(text), `理解の画面に「${text}」がない`);
   assert.match(understand, /件のうち \d+ 件は、固定コミットのファイルと行に存在することを麦漆が確かめました/);
   log('修正前のコミットを読み、目的・起動・構成・処理の流れを根拠付きで表示した');

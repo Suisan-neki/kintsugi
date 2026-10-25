@@ -1,8 +1,7 @@
 import { apiRequest } from "./api.js";
 import { mountDiagram, objectTitle, selectDiagramObject, resizeDiagram, zoomDiagram } from '/ui/repository-diagram.js';
 const $ = id => document.getElementById(id);
-const state = { audience: null, source: null, overview: null, graph: null, selected: null, view: null, sequence: 0, loading: false, saving: false, draftKey: null, preparation: null, dialogue: null, dialogueSequence: 0 };
-const AUDIENCE = { operator: '非技術者', developer: '技術者' };
+const state = { audience: 'developer', source: null, overview: null, graph: null, selected: null, view: null, sequence: 0, loading: false, saving: false, draftKey: null, preparation: null, dialogue: null, dialogueSequence: 0 };
 function el(tag, attrs = {}, ...children) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -16,14 +15,26 @@ function el(tag, attrs = {}, ...children) {
 function button(text, onClick, type = 'outline') { return el('button', { type: 'button', className: 'dads-button', 'data-type': type, 'data-size': 'sm', onClick }, text); }
 function remembered(key) { try { return sessionStorage.getItem(key); } catch { return null; } }
 function remember(key, value) { try { sessionStorage.setItem(key, value); } catch { /* 保存できなくても現在の画面は使う。 */ } }
+function recordingPerson() {
+  try {
+    const person = JSON.parse(remembered('eel-person'));
+    if (typeof person?.name === 'string' && person.name.trim() && ['developer', 'operator', 'other'].includes(person.role)) return person;
+  } catch { /* 破損したブラウザの設定は記録へ使わない。 */ }
+  return { name: '開発者（本人確認なし）', role: 'developer' };
+}
+function initializeRecorder() {
+  let saved; try { saved = JSON.parse(remembered('eel-person')); } catch { /* 破損した設定は新しい既定で置き換える。 */ }
+  // 旧画面が表示の立場から自動作成した匿名の記録者だけを移行する。
+  if (!saved || saved.name === 'ブラウザ利用者（本人確認なし）') remember('eel-person', JSON.stringify({ name: '開発者（本人確認なし）', role: 'developer' }));
+}
 function status(text) { $('status').textContent = text; }
 function error(e) { $('alert').replaceChildren(el('p', { className: 'input-error' }, e.message)); }
 const api = (path, body) => apiRequest(body ? 'POST' : 'GET', '/api/v1/' + path, body);
 async function run(task, current = () => true) { $('alert').replaceChildren(); try { return await task(); } catch (e) { if (current()) error(e); return null; } }
 function screen(name) {
-  for (const id of ['audience', 'repository', 'system']) $(id + '-screen').hidden = id !== name;
-  $('change-audience').hidden = !state.audience;
-  $('change-audience').textContent = state.audience ? `立場：${AUDIENCE[state.audience]}（変更）` : '';
+  for (const id of ['repository', 'system']) $(id + '-screen').hidden = id !== name;
+  $('change-detail').hidden = name !== 'system';
+  $('change-detail').textContent = state.audience === 'developer' ? '概要を表示' : '技術情報を表示';
 }
 function saveDraft() { if (state.draftKey) remember(state.draftKey, $('concern-text').value); }
 function draftKey() { return state.source ? `eel-concern:${state.source.repository}@${state.source.commit}:${state.selected?.id || 'whole'}` : null; }
@@ -39,7 +50,7 @@ function selectNode(node) {
   saveDraft(); state.selected = node; state.draftKey = draftKey(); state.dialogue = null; $('concern-ai-answer').replaceChildren();
   $('concern-text').value = remembered(state.draftKey) || '';
   $('selected-heading').textContent = node?.object_type === 'relation' ? `${state.graph.nodes.find(n => n.id === node.from)?.title} → ${state.graph.nodes.find(n => n.id === node.to)?.title}` : objectTitle(node, false);
-  $('selected-description').textContent = (state.audience === 'developer' && node?.technical_description ? node.technical_description : node?.description) || (state.audience === 'operator' && state.graph?.overview?.operator_workflow) || state.graph?.overview?.workflow || '全体への不安や疑問も、そのまま書けます。';
+  $('selected-description').textContent = (state.audience === 'developer' && node?.technical_description ? node.technical_description : node?.description) || (state.audience === 'operator' && state.graph?.overview?.operator_workflow) || state.graph?.overview?.workflow || '調べたい処理や障害条件を記入してください。';
   $('select-whole').hidden = !node;
   selectDiagramObject($('repository-diagram'), node?.id);
   const details = $('selected-details'); details.replaceChildren();
@@ -101,22 +112,15 @@ function renderOverview() {
   $('overview-heading').textContent = overview.title;
   $('system-purpose').textContent = state.audience === 'developer' ? overview.purpose : overview.operator_purpose || overview.purpose;
   $('system-workflow').textContent = state.audience === 'developer' ? overview.workflow : overview.operator_workflow || overview.workflow;
-  $('writing-update-note').hidden = Boolean(overview.operator_workflow && state.graph.writing_policy);
+  $('writing-update-note').hidden = Boolean(overview.operator_workflow && state.graph.writing_policy && state.graph.prompt_version === 'gitdiagram-adapted-ja-v3-developer-verification');
 }
-function setAudience(audience) {
-  state.audience = audience; remember('eel-audience', audience);
-  // 名前や権限を推測しない。詳細な検証画面にも自己申告の立場だけを引き継ぐ。
-  remember('eel-person', JSON.stringify({ name: 'ブラウザ利用者（本人確認なし）', role: audience }));
+function setExplanation(audience) {
+  // 保存形式のoperatorは概要表示を指す。記録者の役割とは連動させない。
+  state.audience = audience; remember('mugiurushi-explanation', audience);
   if (state.source) { screen('system'); renderOverview(); run(renderGraph); selectNode(state.selected); renderConcerns(); }
-  else {
-    screen('repository');
-    const params = new URLSearchParams(location.search);
-    if (params.get('url')) { $('repository-url').value = params.get('url'); $('repository-ref').value = params.get('ref') || ''; openRepository(params.get('url'), params.get('ref') || '', false); }
-  }
 }
-for (const b of document.querySelectorAll('[data-audience]')) b.addEventListener('click', () => setAudience(b.dataset.audience));
-$('change-audience').addEventListener('click', () => { saveDraft(); screen('audience'); });
-$('change-repository').addEventListener('click', () => { saveDraft(); state.sequence++; state.dialogueSequence++; state.dialogue = null; state.loading = false; $('load-repository').disabled = false; status(''); state.source = null; state.overview = null; state.graph = null; state.selected = null; state.draftKey = null; state.preparation = null; $('repository-url').value = ''; $('repository-ref').value = ''; document.querySelector('.repository-options').open = false; screen('repository'); history.pushState(null, '', '/'); });
+$('change-detail').addEventListener('click', () => { saveDraft(); setExplanation(state.audience === 'developer' ? 'operator' : 'developer'); });
+$('change-repository').addEventListener('click', () => { saveDraft(); state.sequence++; state.dialogueSequence++; state.dialogue = null; state.loading = false; $('load-repository').disabled = false; status(''); state.source = null; state.overview = null; state.graph = null; state.selected = null; state.draftKey = null; state.preparation = null; $('repository-url').value = ''; $('repository-ref').value = ''; document.querySelector('.repository-options').open = false; screen('repository'); renderVerificationHistory(); history.pushState(null, '', '/'); });
 $('select-whole').addEventListener('click', () => selectNode(null));
 $('diagram-fit').addEventListener('click', () => resizeDiagram($('repository-diagram'), 'fit'));
 $('diagram-readable').addEventListener('click', () => resizeDiagram($('repository-diagram'), 'readable'));
@@ -177,19 +181,19 @@ function concerns() {
 async function change(action, reason) {
   // 保存時に最新版を読む。競合を無視して古い状態で上書きしない。
   const view = await api('case');
-  const next = await api('change', { expected_revision: view.workspace.revision, actor: `ブラウザ利用者（${AUDIENCE[state.audience]}・本人確認なし）`, reason, action });
+  const next = await api('change', { expected_revision: view.workspace.revision, actor: recordingPerson().name, reason, action });
   if (!state.view || next.workspace.revision >= state.view.workspace.revision) state.view = next;
   return next;
 }
 $('concern-form').addEventListener('submit', e => {
   e.preventDefault();
   if (state.saving || !state.source || !$('concern-text').value.trim()) return;
-  const source = state.source, node = state.selected, model = state.graph, label = concernLabel(node), audience = state.audience, text = $('concern-text').value.trim(), savedDraftKey = state.draftKey;
+  const source = state.source, node = state.selected, model = state.graph, label = concernLabel(node), text = $('concern-text').value.trim(), savedDraftKey = state.draftKey;
   const ref = node?.refs?.[0];
   state.saving = true; $('save-concern').disabled = true;
   run(async () => {
     const origin = JSON.stringify({ kind: 'repository_concern', repository: source.repository, commit: source.commit, node: node?.id || null, object_type: node?.object_type || 'whole', model_id: model.model_id, model_revision: model.model_revision, label });
-    await change({ op: 'add_statement', statement: { id: id('concern'), kind: 'unanswered', role: audience, text, origin, source: ref ? { repository: source.repository, commit: source.commit, path: ref.path, line: ref.line, end_line: ref.end_line || ref.line } : null, check_ids: [] } }, '構成図から不安・疑問を記録した');
+    await change({ op: 'add_statement', statement: { id: id('concern'), kind: 'unanswered', role: recordingPerson().role, text, origin, source: ref ? { repository: source.repository, commit: source.commit, path: ref.path, line: ref.line, end_line: ref.end_line || ref.line } : null, check_ids: [] } }, '構成図から技術的な検証課題を記録した');
     remember(savedDraftKey, '');
     if (state.source?.repository === source.repository && state.source.commit === source.commit) {
       if (state.draftKey === savedDraftKey && $('concern-text').value.trim() === text) $('concern-text').value = '';
@@ -203,7 +207,7 @@ function checkFor(statement) {
 function renderConcerns() {
   const root = $('concerns'); root.replaceChildren();
   const list = concerns();
-  if (!list.length) { root.append(el('p', { className: 'note' }, 'まだ疑問はありません。構成図の部分を選ぶか、システム全体への疑問を書いてください。')); return; }
+  if (!list.length) { root.append(el('p', { className: 'note' }, 'まだ検証課題はありません。調べたい処理・接続先・障害条件を記入してください。')); return; }
   for (const statement of list) {
     const m = meta(statement), check = checkFor(statement);
     const card = el('article', { className: 'concern-card', 'data-concern': statement.id }, el('p', { className: 'concern-location' }, `${m.label}${m.commit === state.source.commit ? '' : '（以前の版への疑問）'}`), el('h3', {}, statement.text));
@@ -236,7 +240,7 @@ function prepareConcern(card, statement) {
   const label = el('label', { for: `expect-${statement.id}`, className: 'system-label' }, 'どんな動作を確かめたいですか');
   const text = el('textarea', { id: `expect-${statement.id}`, rows: 3, className: 'system-input', required: '', maxlength: 2000 });
   text.value = state.preparation.text; text.addEventListener('input', () => { state.preparation = { statementId: statement.id, text: text.value }; });
-  const form = el('form', {}, label, text, el('p', { className: 'note' }, '期待する動作を具体的に書いてください。起動方法や確認方法は、次の画面で技術者が設定します。'));
+  const form = el('form', {}, label, text, el('p', { className: 'note' }, '検証する条件と期待する結果を書いてください。次の画面で起動方法・障害条件・観測方法を設定します。'));
   const submit = el('button', { type: 'submit', className: 'dads-button', 'data-type': 'solid-fill', 'data-size': 'sm' }, '検証内容を記録する');
   form.append(submit);
   form.addEventListener('submit', e => {
@@ -262,11 +266,40 @@ function workbenchLink(label, check, m, step) {
   return el('a', { href, className: 'dads-button', 'data-type': 'outline', 'data-size': 'sm' }, label);
 }
 async function restore() {
-  const audience = remembered('eel-audience'); state.audience = AUDIENCE[audience] ? audience : null;
+  // 旧画面の立場選択は引き継がず、開発者向けの技術情報を既定にする。
+  state.audience = remembered('mugiurushi-explanation') === 'operator' ? 'operator' : 'developer';
+  initializeRecorder();
   const params = new URLSearchParams(location.search);
-  if (!state.audience) { screen('audience'); return; }
   screen('repository');
+  run(loadVerificationHistory);
   if (params.get('url')) { $('repository-url').value = params.get('url'); $('repository-ref').value = params.get('ref') || ''; await openRepository(params.get('url'), params.get('ref') || '', false); }
+}
+
+async function loadVerificationHistory() {
+  const view = await api('case');
+  if (!state.view || view.workspace.revision >= state.view.workspace.revision) state.view = view;
+  renderVerificationHistory();
+}
+function renderVerificationHistory() {
+  const root = $('verification-items'); root.replaceChildren();
+  const checks = state.view?.workspace.checks || [];
+  if (!checks.length) { root.append(el('p', { className: 'note' }, 'まだ検証項目はありません。構成・コードの調査から項目を作成するか、検証設定で直接登録できます。')); return; }
+  for (const check of [...checks].reverse()) {
+    const result = state.view.checks.find(c => c.check_id === check.id);
+    const statement = state.view.workspace.statements.find(s => check.origin === `repository-concern:${s.id}`);
+    const parsed = statement ? meta(statement) : null;
+    const origin = parsed?.kind === 'repository_concern' && typeof parsed.repository === 'string' && typeof parsed.commit === 'string' && /^[0-9a-f]{40}$/.test(parsed.commit) ? parsed : null;
+    const source = check.source || origin;
+    const card = el('article', { className: 'verification-item', 'data-check-summary': check.id }, el('h3', {}, check.text));
+    card.append(el('p', { className: 'note' }, source?.repository && source.commit ? `${source.repository} @ ${source.commit.slice(0, 12)}・条件の版 ${check.version}` : `対象コードは未設定・条件の版 ${check.version}`));
+    card.append(el('p', {}, result?.evidence.length ? `検証結果：${({ satisfied: '条件を満たす', not_satisfied: '条件を満たさない', unknown: '証拠不足・判定不能' })[result.verdict]}。${result.reason}` : '未実行。検証項目を登録した段階です。'));
+    const url = new URL('/workbench', location.origin);
+    if (source?.repository && source.commit) { url.searchParams.set('url', 'https://github.com/' + source.repository); url.searchParams.set('ref', source.commit); url.searchParams.set('check', check.id); }
+    if (origin && typeof origin.model_revision === 'string' && /^[0-9a-f]{64}$/.test(origin.model_revision)) { url.searchParams.set('system_ref', origin.commit); url.searchParams.set('diagram', origin.model_revision); url.searchParams.set('from', 'system'); if (typeof origin.node === 'string') url.searchParams.set('focus', origin.node); }
+    const actions = el('div', { className: 'button-row' }, el('a', { href: url.pathname + url.search + '#trial' }, '検証の設定を開く'));
+    if (result?.evidence.length) actions.append(el('a', { href: url.pathname + url.search + '#result' }, '結果・比較を開く'));
+    card.append(actions); root.append(card);
+  }
 }
 window.addEventListener('popstate', () => { saveDraft(); state.sequence++; state.dialogueSequence++; state.dialogue = null; state.loading = false; $('load-repository').disabled = false; restore(); });
 restore();
@@ -315,12 +348,12 @@ function renderDialogue() {
   if (sourceRead?.loaded_files?.length) root.append(el('details', {}, el('summary', {}, '今回追加で読んだファイル'), el('ul', {}, sourceRead.loaded_files.map(path => el('li', {}, path)))));
   if (sourceRead?.failed_files?.length) root.append(el('p', { className: 'ref-unverified' }, `追加で読めなかったファイル：${sourceRead.failed_files.map(f => f.path).join('、')}。この部分は未確認です。`));
   const record = dialogue.record;
-  const summary = el('section', { className: 'dialogue-record' }, el('h3', {}, 'ここまでに整理したこと'), el('p', { className: 'note' }, '会話から整理した案です。期待する動作や検証内容を確認してから記録できます。'));
+  const summary = el('section', { className: 'dialogue-record' }, el('h3', {}, 'ここまでに整理したこと'), el('p', { className: 'note' }, '会話から整理した案です。条件・期待する結果・観測方法を確認してから記録できます。'));
   const details = el('dl', {});
-  for (const [label, value] of [['気になっていること', record.concern], ['操作する人', record.actor], ['操作・場面', record.operation], ['期待する動作', record.expectation]]) details.append(el('dt', {}, label), el('dd', {}, value || 'まだ分かっていません'));
+  for (const [label, value] of [['検証課題', record.concern], ['操作・処理の主体', record.actor], ['操作・場面', record.operation], ['期待する動作', record.expectation]]) details.append(el('dt', {}, label), el('dd', {}, value || 'まだ分かっていません'));
   summary.append(details);
   const names = record.related_object_ids.map(id => concernLabel(findObject(id)));
-  if (names.length) summary.append(el('p', { className: 'note' }, `この相談に関係する部分：${names.join('、')}。図では枠線で示しています。`));
+  if (names.length) summary.append(el('p', { className: 'note' }, `この検証に関係する部分：${names.join('、')}。図では枠線で示しています。`));
   if (dialogue.claims?.length) {
     const basis = el('details', {}, el('summary', {}, 'コードの記述と根拠'));
     for (const claim of dialogue.claims) {
@@ -365,17 +398,17 @@ async function handoffDialogue(dialogue, expectation) {
   }
   let statement = state.view.workspace.statements.find(s => s.id === statementId);
   if (!statement) {
-    await change({ op: 'add_statement', statement: { id: statementId, kind: 'unanswered', role: state.audience, text: record.concern || dialogue.history[0].question, origin: JSON.stringify(origin), source, check_ids: [] } }, '構成図についての会話から疑問を記録した');
+    await change({ op: 'add_statement', statement: { id: statementId, kind: 'unanswered', role: recordingPerson().role, text: record.concern || dialogue.history[0].question, origin: JSON.stringify(origin), source, check_ids: [] } }, '構成図についての会話から検証課題を記録した');
     statement = state.view.workspace.statements.find(s => s.id === statementId);
   }
   let check = checkFor(statement);
   if (!check || check.text !== expectation) {
     if (previousCheck) {
-      await change({ op: 'revise_check', check_id: previousCheck.id, text: expectation, origin: `repository-concern:${statementId}`, rule: 'manual_only', dependencies: previousCheck.dependencies }, '会話で整理し直した確認項目を利用者が確認し、検証内容の版を更新した');
+      await change({ op: 'revise_check', check_id: previousCheck.id, text: expectation, origin: `repository-concern:${statementId}`, rule: 'manual_only', dependencies: previousCheck.dependencies }, '開発者が整理し直した検証項目を確認し、条件の版を更新した');
       const updated = state.view.workspace.checks.find(c => c.id === previousCheck.id);
       for (const text of record.unknowns) if (!updated.questions.some(q => q.text === text)) await change({ op: 'add_question', check_id: previousCheck.id, question: { id: id('dialogue-unknown'), text, answer: null, origin: null } }, '整理し直した検証内容へ未確認事項を残した');
     } else {
-      await change({ op: 'add_check', check: { id: `${statementId}-check`, version: 1, text: expectation, origin: `repository-concern:${statementId}`, source, observation: null, rule: 'manual_only', dependencies: [], questions: record.unknowns.map((text, n) => ({ id: `unknown-${n + 1}`, text, answer: null, origin: null })) } }, '会話で整理した期待を利用者が確認し、未確認事項とともに検証内容として記録した');
+      await change({ op: 'add_check', check: { id: `${statementId}-check`, version: 1, text: expectation, origin: `repository-concern:${statementId}`, source, observation: null, rule: 'manual_only', dependencies: [], questions: record.unknowns.map((text, n) => ({ id: `unknown-${n + 1}`, text, answer: null, origin: null })) } }, '開発者が会話の整理案を確認し、未確認事項とともに検証内容を記録した');
     }
     check = checkFor(statement);
   }
@@ -384,7 +417,7 @@ async function handoffDialogue(dialogue, expectation) {
 }
 $('ask-concern-ai').addEventListener('click', () => {
   const question = $('concern-text').value.trim();
-  if (!question) { status('不安や疑問を入力してください。'); $('concern-text').focus(); return; }
+  if (!question) { status('技術的な疑問や検証したい条件を入力してください。'); $('concern-text').focus(); return; }
   const submit = $('ask-concern-ai'); if (submit.disabled || !state.source) return; submit.disabled = true;
   const seq = ++state.dialogueSequence, binding = dialogueBinding(), turn = state.dialogue?.turn || 0;
   status('図とコード、これまでの会話から疑問を整理しています。');

@@ -24,6 +24,9 @@ const dify=createServer(async(req,res)=>{
       let text='';for await(const chunk of req)text+=chunk;
       const body=JSON.parse(text), query=JSON.parse(body.query), context=JSON.parse(body.inputs.system_context); calls.push({body,query,context});
       assert.equal(query.audience,body.inputs.audience);
+      assert.match(query.audience,/開発者/);
+      assert.match(query.verification_scope,/技術的な検証/);
+      assert.equal(query.verification_scope,context.verification_scope);
       assert.match(query.writing_policy,/主述・修飾・条件の点検/);
       assert.equal(query.writing_policy_source.commit,'488dd37c0baa67ec65bf155aced9fa1a01d261e2');
       assert.ok(context.architecture.nodes.some(n=>n.id===context.selected_element));
@@ -68,15 +71,16 @@ try{
     assert.equal(r.body.record.actor,'私');assert.equal(r.body.record.test_plan.length,1);if(!native)assert.equal(calls[1].body.conversation_id,'synthetic-conversation-1');assert.ok(queries()[1].query.previous_record.concern);
     const before=await view();assert.equal(before.workspace.checks.length,0);assert.equal(before.workspace.evidence.length,0);
     for(const mode of ['object','ref','stale']){invalidMode=mode;ai.state.dialogueMode=mode;assert.equal((await ask('不正な整理案を拒否する',2)).status,400);assert.equal((await read()).turn,2);}invalidMode='';ai.state.dialogueMode='';
+    for(const call of queries()){assert.match(call.query.verification_scope,/技術的な検証/);assert.match(call.query.audience,/開発者/);}
     const callCount=queries().length;assert.equal((await ask('古い画面から送信',1)).status,400);assert.equal(queries().length,callCount);
     const saved=await read(),statementId='dialogue-test',source={repository:binding.repository,commit:binding.commit,path:'server/main.py',line:3,end_line:3};
     await change({op:'add_statement',statement:{id:statementId,kind:'unanswered',role:'operator',text:saved.record.concern,origin:JSON.stringify({kind:'repository_concern',...binding,model_revision:binding.revision,dialogue_id:saved.thread_id,dialogue_turn:2}),source,check_ids:[]}});
     await change({op:'add_check',check:{id:'dialogue-check',version:1,text:'私が保存後に開き直しても同じ内容を読める',origin:'repository-concern:'+statementId,source,observation:null,rule:'manual_only',dependencies:[],questions:saved.record.unknowns.map((text,n)=>({id:'unknown-'+n,text,answer:null,origin:null}))}});
-    let v=await view();assert.equal(v.workspace.statements[0].confirmations.length,0);assert.equal(v.workspace.checks[0].questions[0].answer,null);assert.equal(v.workspace.evidence.length,0);
+    let v=await view();assert.equal(v.workspace.statements[0].role,'operator','既存APIで指定した役割は変更しない');assert.equal(v.workspace.statements[0].confirmations.length,0);assert.equal(v.workspace.checks[0].questions[0].answer,null);assert.equal(v.workspace.evidence.length,0);
     await change({op:'configure_reported_observation',check_id:'dialogue-check',criterion:{assertion:'readback_matches',subject:'notification-1'}});
     const trace=JSON.parse(execFileSync('python3',[join(root,'examples/general-observations/producer.py'),'--run-id','dialogue-api-missing','--mode','missing'],{encoding:'utf8'}));
     v=await view();const c=v.workspace.checks[0];trace.source=c.source;await change({op:'import_reported',condition:{id:c.id,version:c.version,text:c.text,origin:c.origin,kind:'custom'},trace});
-    r=await ask('この結果から何が分かる？',2,'developer');assert.equal(r.status,200,JSON.stringify(r.body));assert.equal(queries().at(-1).query.results.checks[0].result.verdict,'unknown');assert.equal(queries().at(-1).query.audience,'技術者');assert.equal(r.body.turn,3);
+    r=await ask('この結果から何が分かる？',2,'developer');assert.equal(r.status,200,JSON.stringify(r.body));assert.equal(queries().at(-1).query.results.checks[0].result.verdict,'unknown');assert.equal(queries().at(-1).query.audience,'開発者（技術情報を含む説明）');assert.equal(r.body.turn,3);
     assert.equal((await post('system-diagram/dialogue/read',{...binding,object_id:null})).body.turn,0);
     assert.equal((await post('system-diagram/dialogue/read',{...binding,revision:'f'.repeat(64)})).status,404);
     assert.equal((await fetch(url+'/dify.json',{headers})).status,404);assert.ok(!JSON.stringify(await read()).includes('private-key'));
@@ -90,7 +94,7 @@ try{
   const post=async(path,data)=>{const r=await page.request.post(url+'/api/v1/'+path,{headers,data});return {status:r.status(),body:await r.json()};};
   const view=async()=> (await page.request.get(url+'/api/v1/case',{headers})).json();
   const change=async(action)=>{const v=await view();const r=await post('change',{expected_revision:v.workspace.revision,actor:'合成の開発者',reason:'対話から検証結果へ接続する試験',action});assert.equal(r.status,200,JSON.stringify(r.body));return r.body;};
-  await page.getByRole('button',{name:/非技術者/}).click();await page.locator('#repository-url').fill('https://github.com/'+snapshot.fullName);
+  await page.locator('#repository-url').fill('https://github.com/'+snapshot.fullName);
   await page.getByText('ブランチ・コミットを指定する',{exact:true}).click();await page.locator('#repository-ref').fill(snapshot.commit);await page.getByRole('button',{name:'構成図を作成する',exact:true}).click();
   await page.locator('#system-screen:not([hidden])').waitFor();
   const model=(await post('system-diagram',{repository:snapshot.fullName,commit:snapshot.commit})).body.result;
@@ -109,12 +113,12 @@ try{
   for(const mode of ['object','ref','stale']){invalidMode=mode;const bad=await post('system-diagram/dialogue',{binding,expected_turn:2,audience:'operator',question:'変な根拠の拒否を確認'});assert.equal(bad.status,400);assert.equal((await read()).turn,2);}invalidMode='';
   const conflicted=await post('system-diagram/dialogue',{binding,expected_turn:1,audience:'operator',question:'古い画面から送信'});assert.equal(conflicted.status,400);
   await page.reload();await page.locator('.dialogue-history summary',{hasText:'2往復'}).waitFor();
-  await page.getByRole('button',{name:/立場：非技術者/}).click();await page.getByRole('button',{name:/^技術者/}).click();await page.locator('.dialogue-history summary',{hasText:'2往復'}).waitFor();
+  await page.getByRole('button',{name:'概要を表示',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'2往復'}).waitFor();
   assert.equal((await read()).turn,2);
   await page.getByLabel('検証する動作',{exact:true}).fill('私が保存後に開き直しても同じ内容を読める');
   await page.getByRole('button',{name:'この内容を検証する',exact:true}).click();await page.locator('#trial:not([hidden])').waitFor();
   let v=await view(),check=v.workspace.checks[0];assert.equal(check.rule,'manual_only');assert.equal(v.workspace.evidence.length,0);assert.equal(check.questions[0].text,'保存後の再読込は未検証です。');
-  assert.equal(v.workspace.statements[0].confirmations.length,0);assert.equal(JSON.parse(v.workspace.statements[0].origin).dialogue_turn,2);
+  assert.equal(v.workspace.statements[0].role,'developer','概要表示でも開発者として記録する');assert.equal(v.workspace.statements[0].confirmations.length,0);assert.equal(JSON.parse(v.workspace.statements[0].origin).dialogue_turn,2);
   assert.equal(await page.getByLabel('検証する動作',{exact:true}).inputValue(),check.id);
   assert.equal(await page.getByLabel('検証する動作',{exact:true}).locator('option',{hasText:check.text}).count(),1);
   await page.getByRole('link',{name:/検証する動作を決める/}).click();
@@ -125,19 +129,19 @@ try{
   await change({op:'configure_reported_observation',check_id:check.id,criterion:{assertion:'readback_matches',subject:'notification-1'}});
   const trace=JSON.parse(execFileSync('python3',[join(root,'examples/general-observations/producer.py'),'--run-id','dialogue-reported-missing','--mode','missing'],{encoding:'utf8'}));
   v=await view();check=v.workspace.checks[0];trace.source=check.source;await change({op:'import_reported',condition:{id:check.id,version:check.version,text:check.text,origin:check.origin,kind:'custom'},trace});
-  await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'2往復'}).waitFor();
+  await page.getByRole('link',{name:'構成図と検証項目に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'2往復'}).waitFor();
   await ask('この結果から何が分かる？',3);const last=calls.at(-1);assert.equal(last.query.results.checks[0].result.verdict,'unknown');assert.equal(last.query.results.checks[0].result.evidence[0].run_id,'dialogue-reported-missing');
   assert.match(await page.locator('.dialogue-reply').last().innerText(),/失敗と断定できません/);
   // 同じ期待は複製せず、同じ会話で編集した確認項目も版へ反映する。
   await page.getByRole('button',{name:'この内容で再検証する',exact:true}).click();await page.locator('#trial:not([hidden])').waitFor();
   v=await view();assert.equal(v.workspace.checks.length,1);assert.equal(v.workspace.checks[0].version,check.version);
   for(const expectation of ['開き直した後の本文が保存前の本文と一致する','二度開き直した後も保存前の本文と一致する']){
-    await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
+    await page.getByRole('link',{name:'構成図と検証項目に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
     await page.getByLabel('検証する動作',{exact:true}).fill(expectation);
     await page.getByRole('button',{name:'この内容で再検証する',exact:true}).click();await page.locator('#trial:not([hidden])').waitFor();
     v=await view();assert.equal(v.workspace.checks.length,1);assert.equal(v.workspace.checks[0].text,expectation);assert.equal(v.workspace.checks[0].version,++check.version);
   }
-  await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
+  await page.getByRole('link',{name:'構成図と検証項目に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
   assert.equal((await post('system-diagram/dialogue/read',{...binding,object_id:null})).body.turn,0);
   assert.equal((await post('system-diagram/dialogue/read',{...binding,revision:'f'.repeat(64)})).status,404);
   // 試す版を変え、元の図へ戻って再び検証へ進んでも、図と試験のコミットを混ぜない。
@@ -149,10 +153,16 @@ try{
   assert.equal(trialUrl.searchParams.get('system_ref'),snapshot.commit);
   await trialLink.click();await page.locator('#trial:not([hidden])').waitFor();
   await page.reload();await page.locator('#trial:not([hidden])').waitFor();
-  assert.equal(new URL(await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).getAttribute('href'),url).searchParams.get('ref'),snapshot.commit);
-  await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
+  assert.equal(new URL(await page.getByRole('link',{name:'構成図と検証項目に戻る',exact:true}).getAttribute('href'),url).searchParams.get('ref'),snapshot.commit);
+  await page.getByRole('link',{name:'構成図と検証項目に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
   assert.equal((await read()).turn,3);
   assert.equal(new URL(await page.getByRole('link',{name:'検証結果を確認する',exact:true}).getAttribute('href'),url).searchParams.get('system_ref'),snapshot.commit);
+  await page.goto(url);
+  const summary=page.locator(`[data-check-summary="${check.id}"]`);await summary.waitFor();
+  assert.match(await summary.innerText(),/証拠不足・判定不能/);
+  const resultHref=new URL(await summary.getByRole('link',{name:'結果・比較を開く',exact:true}).getAttribute('href'),url);
+  assert.equal(resultHref.searchParams.get('ref'),trialCommit);assert.equal(resultHref.searchParams.get('system_ref'),snapshot.commit);
+  await summary.getByRole('link',{name:'結果・比較を開く',exact:true}).click();await page.locator('#result:not([hidden])').waitFor();
   await mkdir(join(root,'test-results'),{recursive:true});await page.screenshot({path:join(root,'test-results/dialogue-handoff.png'),fullPage:true});
   assert.deepEqual(errors,[]);console.log(JSON.stringify({checks:['Dify chat and variables protocol','multi-turn structured record','same diagram highlights','reload and role switch','reject invented nodes, refs and stale variable','conflict preserves history','human-edited expectation and unknowns handoff','no automatic evidence or agreement','reported result returns to original conversation','diagram and selection isolation'],actual_dify_api:'not_connected',actual_target_execution:'not_conducted'}));
   }

@@ -416,7 +416,7 @@ async function loadCase() {
   if (state.step.startsWith('trial')) renderTrial();
   if (state.step === 'result') renderResult();
 }
-function person() { try { return JSON.parse(sessionStorage.getItem('eel-person')) || { name: '', role: 'operator' }; } catch { return { name: '', role: 'operator' }; } }
+function person() { try { return JSON.parse(sessionStorage.getItem('eel-person')) || { name: '', role: 'developer' }; } catch { return { name: '', role: 'developer' }; } }
 function personFields() {
   const p = person();
   const name = input({ value: p.name, autocomplete: 'name' });
@@ -560,7 +560,7 @@ function expectationCard(check) {
     h('p', {}, h('strong', {}, '対応づけたコード: '), check.source ? refLinksFor(check.source) : 'まだありません。'),
     unanswered.length ? h('div', {}, h('strong', {}, '未回答の質問'), h('ul', { class: 'items' }, unanswered.map(q => answerForm(check, q)))) : null,
     disclosure('確認項目と説明の履歴', statements.map(statementBlock)),
-    h('details', { class: 'dads-disclosure', open: Boolean(pending) }, h('summary', { class: 'dads-disclosure__summary' }, '実装と確認方法を対応づける（技術者）'), h('div', { class: 'dads-disclosure__content' },
+    h('details', { class: 'dads-disclosure', open: Boolean(pending) }, h('summary', { class: 'dads-disclosure__summary' }, '実装と観測方法を対応づける'), h('div', { class: 'dads-disclosure__content' },
       pending ? h('p', {}, `使うコード: ${pending.path} ${pending.line}〜${pending.end_line}行目（コミット ${shortCommit(pending.commit)}）`) : field({ label: 'コードの行', control: refUrl, support: 'コードの画面で行を選んで「この行を確認項目に関連づける」を押すと入ります。固定コミットのGitHubの行のURLも使えます。' }),
       field({ label: 'この動作を実装しているコードと処理内容', control: explain, required: true }),
       field({ label: 'どう確かめるか（確認の方法）', control: method, required: true, support: '例: 試験用の値でタスクを追加し、麦漆が保存先 tasks を読み出して値があることと、別のプロセスで一覧に出ることを確かめる。' }),
