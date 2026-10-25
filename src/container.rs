@@ -190,7 +190,7 @@ pub struct TrafficSummary {
     pub to: String,
     /// 開始した接続の数（`unfinished`を含む）。
     pub connections: u32,
-    /// 閉じた接続のうち、中継が対象へつなげなかった、または対象が応答せず閉じたもの。
+    /// 閉じた接続のうち、中継の状態が200以外だったもの。接続拒否だけでなく、クライアントの切断や中継停止を含む。アプリの処理の成否ではない。
     pub failed: u32,
     /// 開始したが、記録を取る時点までに閉じなかった接続。接続先が止まって待たされた接続を含む。
     #[serde(default)]
@@ -878,7 +878,7 @@ impl Session {
         let omitted_rows = summary.len().saturating_sub(MAX_TRAFFIC_ROWS);
         summary.truncate(MAX_TRAFFIC_ROWS);
         let mut note = String::from(
-            "中継を通った接続（接続元・接続先の対象、成否、バイト数）を記録した。閉じなかった接続は件数だけで、成否とバイト数は分からない。中継を通らない通信と、通信の中身は記録していない",
+            "中継を通った接続（接続元・接続先の対象、中継の状態、バイト数）を記録した。失敗件数は中継の状態が200以外の接続で、クライアントの切断や中継停止も含み、アプリの処理の成否ではない。閉じなかった接続は件数だけで、成否とバイト数は分からない。中継を通らない通信と、通信の中身は記録していない",
         );
         if !unavailable.is_empty() {
             note.push_str(&format!(
