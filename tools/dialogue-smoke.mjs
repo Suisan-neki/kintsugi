@@ -13,6 +13,8 @@ snapshot.inventory.push({path:'interface/forms/soap/save.php',mode:'100644'});
 snapshot.files['interface/forms/soap/save.php']="<?php\nsqlInsert('form_soap', $value);\n";
 await mkdir(join(data,'snapshots',snapshot.fullName),{recursive:true});
 await writeFile(join(data,'snapshots',snapshot.fullName,snapshot.commit+'.json'),JSON.stringify(snapshot));
+const trialCommit='b'.repeat(40);
+await writeFile(join(data,'snapshots',snapshot.fullName,trialCommit+'.json'),JSON.stringify({...snapshot,commit:trialCommit,reference:trialCommit}));
 const native=process.env.EEL_DIALOGUE_NATIVE==='1';
 const ai=await startSyntheticArchitectureAI(), calls=[], pending=new Map(); let invalidMode='', serial=0;
 const dify=createServer(async(req,res)=>{
@@ -138,6 +140,19 @@ try{
   await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
   assert.equal((await post('system-diagram/dialogue/read',{...binding,object_id:null})).body.turn,0);
   assert.equal((await post('system-diagram/dialogue/read',{...binding,revision:'f'.repeat(64)})).status,400);
+  // 試す版を変え、元の図へ戻って再び検証へ進んでも、図と試験のコミットを混ぜない。
+  await change({op:'bind_source',check_id:check.id,source:{...check.source,commit:trialCommit}});
+  await page.reload();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
+  const trialLink=page.getByRole('link',{name:'検証の設定へ進む',exact:true});
+  const trialUrl=new URL(await trialLink.getAttribute('href'),url);
+  assert.equal(trialUrl.searchParams.get('ref'),trialCommit);
+  assert.equal(trialUrl.searchParams.get('system_ref'),snapshot.commit);
+  await trialLink.click();await page.locator('#trial:not([hidden])').waitFor();
+  await page.reload();await page.locator('#trial:not([hidden])').waitFor();
+  assert.equal(new URL(await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).getAttribute('href'),url).searchParams.get('ref'),snapshot.commit);
+  await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
+  assert.equal((await read()).turn,3);
+  assert.equal(new URL(await page.getByRole('link',{name:'検証結果を確認する',exact:true}).getAttribute('href'),url).searchParams.get('system_ref'),snapshot.commit);
   await mkdir(join(root,'test-results'),{recursive:true});await page.screenshot({path:join(root,'test-results/dialogue-handoff.png'),fullPage:true});
   assert.deepEqual(errors,[]);console.log(JSON.stringify({checks:['Dify chat and variables protocol','multi-turn structured record','same diagram highlights','reload and role switch','reject invented nodes, refs and stale variable','conflict preserves history','human-edited expectation and unknowns handoff','no automatic evidence or agreement','reported result returns to original conversation','diagram and selection isolation'],actual_dify_api:'not_connected',actual_target_execution:'not_conducted'}));
   }

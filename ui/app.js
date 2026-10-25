@@ -263,7 +263,7 @@ function prepareConcern(card, statement) {
   card.append(form); text.focus();
 }
 function workbenchLink(label, check, m, step) {
-  const href = `/workbench?url=${encodeURIComponent('https://github.com/' + m.repository)}&ref=${encodeURIComponent(check.source?.commit || m.commit)}&check=${encodeURIComponent(check.id)}${m.node ? `&focus=${encodeURIComponent(m.node)}` : ''}${m.model_revision ? `&diagram=${encodeURIComponent(m.model_revision)}` : ''}&from=system#${step}`;
+  const href = `/workbench?url=${encodeURIComponent('https://github.com/' + m.repository)}&ref=${encodeURIComponent(check.source?.commit || m.commit)}&system_ref=${encodeURIComponent(m.commit)}&check=${encodeURIComponent(check.id)}${m.node ? `&focus=${encodeURIComponent(m.node)}` : ''}${m.model_revision ? `&diagram=${encodeURIComponent(m.model_revision)}` : ''}&from=system#${step}`;
   return el('a', { href, className: 'dads-button', 'data-type': 'outline', 'data-size': 'sm' }, label);
 }
 async function restore() {
