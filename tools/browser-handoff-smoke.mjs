@@ -90,10 +90,11 @@ try {
       return value;
     };
     assert.deepEqual(normalized(actual.browser), normalized(original.browser));
+    await writeFile(join(output, 'browser-handoff-live.json'), JSON.stringify({ source: actual.source, run_id: evidence.manifest.correlation.run_id, verdict: v.checks.find(c => c.check_id === 'soap-dialogue-check').verdict, human_evaluation: 'not_conducted' }, null, 2));
     // 再読込後の再試験は、保存したブラウザ手順を復元する。
-    await page.reload(); await page.locator('a.step-link[href="#trial"]').click();
+    await page.reload(); await page.locator('#result:not([hidden]) [data-evidence]').first().waitFor();
+    await page.locator('a.step-link[href="#trial"]').click();
     await page.getByRole('region', { name: 'ブラウザ試験の設定' }).waitFor();
-    await writeFile(join(output, 'browser-handoff-live.json'), JSON.stringify({ source: actual.source, run_id: evidence.manifest.correlation.run_id, verdict: v.checks.find(c => c.id === 'soap-dialogue-check').verdict, human_evaluation: 'not_conducted' }, null, 2));
   } else {
     await page.getByText('合成試験：実行直前で停止', { exact: true }).waitFor();
     const expected = structuredClone(original); expected.check_id = 'soap-dialogue-check'; expected.criterion.subject = expected.check_id;
@@ -102,4 +103,9 @@ try {
   }
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks: ['版の相違を表示', '明示操作による参照先変更', '相談の出所を保持', '確認まで実行しない', 'ブラウザ手順・入力・観測先を保持', ...(live ? ['画面から実OpenEMRを起動・保存・再表示・DB照合', '再読込後にブラウザ設定へ戻る'] : [])], actual_target_execution: live ? 'OpenEMR' : 'not_conducted' }));
+} catch (error) {
+  await mkdir(output, { recursive: true });
+  const page = browser?.contexts()[0]?.pages()[0];
+  await page?.screenshot({ path: join(output, 'browser-handoff-failure.png'), fullPage: true }).catch(() => {});
+  throw error;
 } finally { child.kill('SIGTERM'); await browser?.close(); await rm(temp, { recursive: true, force: true }); }
