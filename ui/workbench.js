@@ -1270,8 +1270,14 @@ if (params.get('url')) { $('repo-url').value = params.get('url'); $('repo-ref').
 
 
 if (params.get('from') === 'system' && params.get('url')) {
+  // 検証対象のrefを切り替えても、元の図・会話の版を保持する。
+  const systemRef = params.get('system_ref') || params.get('ref') || '';
+  if (!params.has('system_ref')) {
+    const current = new URL(location.href); current.searchParams.set('system_ref', systemRef);
+    history.replaceState(null, '', current);
+  }
   const back = new URL('/', location.origin);
-  back.searchParams.set('url', params.get('url')); back.searchParams.set('ref', params.get('ref') || '');
+  back.searchParams.set('url', params.get('url')); back.searchParams.set('ref', systemRef);
   if (params.get('focus')) back.searchParams.set('focus', params.get('focus'));
   if (params.get('diagram')) back.searchParams.set('diagram', params.get('diagram'));
   $('back-to-system').href = back.pathname + back.search;

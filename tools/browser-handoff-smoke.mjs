@@ -50,7 +50,7 @@ try {
     id: 'soap-dialogue-check', version: 1, text: 'SOAPを保存して開き直し、4項目の内容をDBと照合できる', origin,
     source: { ...original.source, commit: before }, rule: 'manual_only', dependencies: [], questions: [],
   } } });
-  const requestUrl = new URL(url + '/workbench'); requestUrl.search = new URLSearchParams({ url: 'https://github.com/' + repository, ref: before, check: 'soap-dialogue-check' }); requestUrl.hash = 'trial';
+  const requestUrl = new URL(url + '/workbench'); requestUrl.search = new URLSearchParams({ url: 'https://github.com/' + repository, ref: before, check: 'soap-dialogue-check', from: 'system', focus: 'synthetic-node', diagram: 'd'.repeat(64) }); requestUrl.hash = 'trial';
   await page.goto(requestUrl.href);
   const preset = page.locator('[data-browser-preset="openemr-soap"]'); await preset.waitFor();
   assert.match(await preset.innerText(), /現在の確認項目の版/);
@@ -58,12 +58,17 @@ try {
   await preset.getByRole('button', { name: /^レシピの版に切り替えて設定する/ }).click();
   await page.getByRole('region', { name: 'ブラウザ試験の設定' }).waitFor();
   let v = await view(); assert.equal(v.workspace.checks[0].source.commit, commit); assert.equal(v.workspace.checks[0].origin, origin); assert.equal(v.workspace.evidence.length, 0);
+  assert.equal(new URL(await page.locator('#back-to-system').getAttribute('href'), url).searchParams.get('ref'), before);
   await page.getByRole('button', { name: '次へ：試す状況を選ぶ', exact: true }).click();
   await page.getByRole('button', { name: '次へ：判定の条件を確認する', exact: true }).click();
   await page.getByRole('button', { name: '実行前に確認する', exact: true }).click();
   assert.match(await page.locator('#trial-body').innerText(), /soap-subjective/);
   assert.equal((await view()).workspace.evidence.length, 0);
   await mkdir(output, { recursive: true }); await page.screenshot({ path: join(output, 'browser-handoff-confirm.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), '390px幅で横にはみ出さない');
+  await page.screenshot({ path: join(output, 'browser-handoff-confirm-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   let sent;
   if (!live) {
     await page.route('**/api/v1/prepare', route => route.fulfill({ json: { executed: false } }));
@@ -93,6 +98,7 @@ try {
     await writeFile(join(output, 'browser-handoff-live.json'), JSON.stringify({ source: actual.source, run_id: evidence.manifest.correlation.run_id, verdict: v.checks.find(c => c.check_id === 'soap-dialogue-check').verdict, human_evaluation: 'not_conducted' }, null, 2));
     // 再読込後の再試験は、保存したブラウザ手順を復元する。
     await page.reload(); await page.locator('#result:not([hidden]) [data-evidence]').first().waitFor();
+    assert.equal(new URL(await page.locator('#back-to-system').getAttribute('href'), url).searchParams.get('ref'), before);
     await page.locator('a.step-link[href="#trial"]').click();
     await page.getByRole('region', { name: 'ブラウザ試験の設定' }).waitFor();
   } else {
@@ -100,6 +106,8 @@ try {
     const expected = structuredClone(original); expected.check_id = 'soap-dialogue-check'; expected.criterion.subject = expected.check_id;
     assert.deepEqual(sent.recipe, expected, '準備・操作・HTTP・DBの対象・入力・条件IDを落とさない');
     assert.equal((await view()).workspace.evidence.length, 0);
+    await page.reload(); await page.locator('[data-browser-preset="openemr-soap"]').waitFor();
+    assert.equal(new URL(await page.locator('#back-to-system').getAttribute('href'), url).searchParams.get('ref'), before);
   }
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks: ['版の相違を表示', '明示操作による参照先変更', '相談の出所を保持', '確認まで実行しない', 'ブラウザ手順・入力・観測先を保持', ...(live ? ['画面から実OpenEMRを起動・保存・再表示・DB照合', '再読込後にブラウザ設定へ戻る'] : [])], actual_target_execution: live ? 'OpenEMR' : 'not_conducted' }));
