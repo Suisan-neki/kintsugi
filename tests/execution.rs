@@ -117,7 +117,7 @@ impl Fixture {
             self.condition(),
             None,
         )
-        .unwrap()
+        .unwrap_or_else(|error| panic!("{scenario}: {error}"))
     }
     fn condition(&self) -> Condition {
         Condition {
@@ -563,7 +563,7 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
             &case,
             None,
             "POST",
-            "/api/execute",
+            "/api/v1/execute",
             &value.to_string(),
             true
         )
@@ -571,7 +571,7 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
         403
     );
     assert_eq!(
-        review_http(&case, None, "GET", "/api/execution", "", false).1["enabled"],
+        review_http(&case, None, "GET", "/api/v1/execution", "", true).1["enabled"],
         false
     );
     assert_eq!(
@@ -579,7 +579,7 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
             &case,
             Some(&controller),
             "POST",
-            "/api/execute",
+            "/api/v1/execute",
             &value.to_string(),
             false
         )
@@ -594,7 +594,7 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
                 &case,
                 Some(&controller),
                 "POST",
-                "/api/execute",
+                "/api/v1/execute",
                 &modified.to_string(),
                 true
             )
@@ -609,7 +609,7 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
             &case,
             Some(&controller),
             "POST",
-            "/api/execute",
+            "/api/v1/execute",
             &stale.to_string(),
             true
         )
@@ -623,7 +623,7 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
             &case,
             Some(&controller),
             "POST",
-            "/api/execute",
+            "/api/v1/execute",
             &foreign.to_string(),
             true
         )
@@ -635,7 +635,7 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
         &case,
         Some(&controller),
         "POST",
-        "/api/execute",
+        "/api/v1/execute",
         &value.to_string(),
         true,
     );
@@ -664,7 +664,7 @@ fn background_review_keeps_reads_available_rejects_duplicates_and_preserves_conf
             .kind(),
         std::io::ErrorKind::WouldBlock
     );
-    let (status, current) = review_http(&case, Some(&controller), "GET", "/api/case", "", false);
+    let (status, current) = review_http(&case, Some(&controller), "GET", "/api/v1/case", "", true);
     assert_eq!(status, 200);
     assert_eq!(current["workspace"]["revision"], 1);
     // コピーや起動が終わる前でも、実行終了前の変更は取り込み時に照合する。

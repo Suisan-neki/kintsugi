@@ -1,6 +1,7 @@
+import { apiRequest } from "./api.js";
+import { h, button, field, input, textarea, select, fill, disclosure } from "./workbench-dom.js";
 // 理解と試験の画面。解析・照合・判定はサーバーのAPIが行い、この画面は結果を表示して操作を送る。
 // 画面の文字はtextContentで入れ、取得したコードや記録をHTMLとして解釈しない。
-const token = document.querySelector('meta[name="review-token"]').content;
 const $ = id => document.getElementById(id);
 const state = {
   source: null, overview: null, overviewRefs: null, plan: null, view: null, execution: null, ai: null,
@@ -8,9 +9,9 @@ const state = {
 };
 
 const ROLE = { operator: '運用担当', developer: '開発者', other: 'その他' };
-const KIND_LABEL = { code: 'コードで確認', author: '作者の説明', inference: '解析の推測', ai: 'AIの説明' };
+const KIND_LABEL = { code: '簡易解析', author: '作者の説明', inference: '解析の推測', ai: 'AIの説明' };
 const KIND_TITLE = {
-  code: 'コードの記述から確認した事実。実行して確かめたものではない',
+  code: '正規表現でコードの記述を抽出した結果。構文木・実行経路・動作の確認ではなく、読み違いや見落としがある',
   author: 'READMEやコメントなど作者の説明。コードで確かめていない',
   inference: '静的な解析からの推測。実行して確かめていない',
   ai: 'AIによる説明。示した行の存在は麦漆が確かめたが、説明の正しさは確かめていない',
@@ -43,59 +44,6 @@ const LAUNCH_LABEL = Object.fromEntries(LAUNCHES);
 const DECISION = { modify: '修正する', hold: '保留する', verify: '追加で確かめる', ask: '質問する', release: '採用する' };
 
 // ---------- 共通 ----------
-function h(tag, attrs = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs || {})) {
-    if (value === undefined || value === null || value === false) continue;
-    if (key === 'class') el.className = value;
-    else if (key === 'text') el.textContent = value;
-    else if (key === 'value') el.value = value;
-    else if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
-    else if (value === true) el.setAttribute(key, '');
-    else el.setAttribute(key, String(value));
-  }
-  for (const child of children.flat(Infinity)) if (child !== null && child !== undefined && child !== false) el.append(child instanceof Node ? child : String(child));
-  return el;
-}
-function button(text, onclick, type = 'outline', size = 'sm', attrs = {}) {
-  return h('button', { class: 'dads-button', 'data-type': type, 'data-size': size, type: 'button', onclick, ...attrs }, text);
-}
-let uid = 0;
-const nextId = prefix => `${prefix}-${++uid}`;
-function field({ label, id = nextId('f'), support, required, control }) {
-  const supportId = support ? `${id}-support` : null;
-  control.id = id;
-  if (supportId) control.setAttribute('aria-describedby', supportId);
-  if (required) control.required = true;
-  return h('div', { class: 'dads-form-control-label', 'data-size': 'md' },
-    h('label', { class: 'dads-form-control-label__label', for: id }, label, required ? h('span', { class: 'dads-form-control-label__requirement', 'data-required': 'true' }, '※必須') : null),
-    support ? h('p', { id: supportId, class: 'dads-form-control-label__support-text' }, support) : null,
-    h('div', {}, control));
-}
-function input(attrs = {}) { const i = h('input', { class: 'dads-input-text__input', type: 'text', 'data-size': 'md', ...attrs }); const wrap = h('span', { class: 'dads-input-text' }, i); wrap.input = i; return wrapField(wrap, i); }
-function textarea(attrs = {}) { const t = h('textarea', { class: 'dads-textarea__textarea', rows: 3, ...attrs }); return wrapField(h('span', { class: 'dads-textarea' }, t), t); }
-function select(options, attrs = {}) {
-  const s = h('select', { class: 'dads-select__select', 'data-size': 'md', ...attrs }, options.map(([value, text]) => h('option', { value }, text)));
-  return wrapField(h('span', { class: 'dads-select' }, h('span', { class: 'dads-select__control' }, s, chevron())), s);
-}
-function chevron() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('class', 'dads-select__chevron'); svg.setAttribute('width', '16'); svg.setAttribute('height', '16'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true');
-  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', 'M12 17L3 8L4 7L12 15L20 7L21 8L12 17Z'); p.setAttribute('fill', 'currentcolor'); svg.append(p);
-  return svg;
-}
-// field() はラベルを control.id で結ぶ。外側の要素を渡しても内側の入力欄に id が付くようにする。
-function wrapField(wrap, control) {
-  Object.defineProperty(wrap, 'id', { set(v) { control.id = v; }, get() { return control.id; } });
-  wrap.setAttribute = (name, value) => (name === 'aria-describedby' ? control.setAttribute(name, value) : Element.prototype.setAttribute.call(wrap, name, value));
-  Object.defineProperty(wrap, 'required', { set(v) { control.required = v; } });
-  wrap.control = control;
-  return wrap;
-}
-function fill(el, ...children) { el.replaceChildren(...children.flat(Infinity).filter(c => c !== null && c !== undefined && c !== false)); }
-function disclosure(summary, ...content) {
-  return h('details', { class: 'dads-disclosure' }, h('summary', { class: 'dads-disclosure__summary' }, summary), h('div', { class: 'dads-disclosure__content' }, content));
-}
 const ICON = {
   error: 'M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm-1 5h2v7h-2Zm0 9h2v2h-2Z',
   warning: 'M12 2L1 21h22L12 2Zm-1 7h2v6h-2Zm0 8h2v2h-2Z',
@@ -125,13 +73,7 @@ function showError(error, actions = []) {
   node.focus();
 }
 function clearError() { $('alert').replaceChildren(); }
-async function api(method, path, body) {
-  const response = await fetch(path, { method, headers: { 'X-Review-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
-  let data;
-  try { data = await response.json(); } catch { data = { error: `サーバーの応答を読み取れませんでした（HTTP ${response.status}）` }; }
-  if (!response.ok) { const e = new Error(data.error || `HTTP ${response.status}`); e.status = response.status; throw e; }
-  return data;
-}
+const api = apiRequest;
 async function guarded(task) { clearError(); try { return await task(); } catch (e) { showError(e); return null; } }
 function shortCommit(c) { return c ? c.slice(0, 12) : ''; }
 function repoSlug(repository) { return repository.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80); }

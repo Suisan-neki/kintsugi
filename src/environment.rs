@@ -1,4 +1,5 @@
 //! 固定版の依存導入・ビルドを試行専用コンテナで行う。業務条件の判定とは別の記録。
+use crate::error::invalid;
 use crate::{recording::*, workspace::CodeReference};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -102,9 +103,7 @@ pub struct Record {
     pub report: Report,
     pub diagnostics: Vec<String>,
 }
-fn invalid(s: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, s.into())
-}
+
 fn relative(s: &str) -> bool {
     !s.is_empty()
         && !s.contains(['\\', ':', ','])

@@ -5,6 +5,13 @@ edition = "2024"
 rust-version = "1.99"
 
 [dependencies]
+thiserror = "=2.0.21"
+libc = "=0.2.191"
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net", "time", "sync"] }
+hyper = { version = "=1.11.1", features = ["http1", "server"] }
+hyper-util = { version = "=0.1.21", features = ["tokio"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
@@ -14,3 +21,11 @@ ureq = { version = "3", default-features = false, features = ["rustls", "gzip", 
 url = "2"
 sha2 = "0.10.9"
 serde_yaml_ng = "=0.10.0"
+
+# 簡易解析をデバッグビルドでも最適化する。
+[profile.dev.package.regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3

@@ -1,4 +1,5 @@
 //! GitDiagramの構成把握の方針を踏襲し、根拠付きの共通モデルを生成・保存する。
+use crate::error::invalid;
 mod context;
 pub mod dialogue;
 mod model;
@@ -10,9 +11,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, io, path::Path};
 const PROMPT_VERSION: &str = "gitdiagram-adapted-ja-v2-yomiyasu";
 const PROMPT: &str = include_str!("system_diagram/prompt.txt");
-fn invalid(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message.into())
-}
+
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }

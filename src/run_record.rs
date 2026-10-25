@@ -2,8 +2,33 @@
 use crate::{model::*, recording::*};
 use std::{
     fs::OpenOptions,
-    io::{self, Write},
+    io::{self, Read, Write},
+    sync::OnceLock,
 };
+
+/// 実際に起動した実行ファイルを一度だけハッシュする。ソースの署名ではない。
+fn binary_fingerprint() -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    static HASH: OnceLock<Result<String, String>> = OnceLock::new();
+    HASH.get_or_init(|| {
+        let result = (|| -> io::Result<String> {
+            let mut file = std::fs::File::open(std::env::current_exe()?)?;
+            let mut hash = Sha256::new();
+            let mut buffer = [0; 64 * 1024];
+            loop {
+                let size = file.read(&mut buffer)?;
+                if size == 0 {
+                    break;
+                }
+                hash.update(&buffer[..size]);
+            }
+            Ok(format!("binary-sha256:{:x}", hash.finalize()))
+        })();
+        result.map_err(|e| e.to_string())
+    })
+    .clone()
+    .map_err(io::Error::other)
+}
 
 pub fn make_manifest(correlation: Correlation, condition: Condition) -> io::Result<Manifest> {
     Ok(Manifest {
@@ -11,7 +36,7 @@ pub fn make_manifest(correlation: Correlation, condition: Condition) -> io::Resu
         correlation,
         previous_run: None,
         source_revision: env!("SOURCE_REVISION").into(),
-        source_fingerprint: env!("SOURCE_FINGERPRINT").into(),
+        source_fingerprint: binary_fingerprint()?,
         program_version: env!("CARGO_PKG_VERSION").into(),
         os: std::env::consts::OS.into(),
         architecture: std::env::consts::ARCH.into(),

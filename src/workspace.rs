@@ -1,5 +1,6 @@
 //! 一件の確認事項と、その版に対する根拠・人の判断を保存する。
 //! 試行は取り込み時に複製し、答え合わせ用の保存物は読み込まない。
+use crate::error::invalid;
 use crate::{
     execution::{Criterion, ExecutionTrace},
     model::*,
@@ -12,7 +13,10 @@ use std::{
     path::Path,
 };
 
+mod storage;
+
 const MAX_DOCUMENT: u64 = 4 * 1024 * 1024;
+pub(crate) const MAX_WORKSPACE: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -443,9 +447,6 @@ pub enum Change {
     },
 }
 
-fn invalid(text: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text.into())
-}
 fn nonempty(value: &str, name: &str) -> io::Result<()> {
     if value.trim().is_empty() || value.len() > 16_384 {
         return Err(invalid(format!(
@@ -648,51 +649,11 @@ pub fn empty_workspace(id: String, title: String) -> Workspace {
     }
 }
 
-struct WriteLock(std::path::PathBuf);
-impl Drop for WriteLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-fn lock(directory: &Path) -> io::Result<WriteLock> {
-    let path = directory.join("write.lock");
-    let _ = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|error| {
-            if error.kind() == io::ErrorKind::AlreadyExists {
-                io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "別の書き込みが進行中です。停止後に残ったwrite.lockは手動確認してください",
-                )
-            } else {
-                error
-            }
-        })?;
-    Ok(WriteLock(path))
-}
 pub(crate) fn save_revision(directory: &Path, workspace: &Workspace) -> io::Result<()> {
-    validate(workspace)?;
-    if serde_json::to_vec_pretty(workspace)
-        .map_err(io::Error::other)?
-        .len() as u64
-        + 1
-        > MAX_DOCUMENT
-    {
-        return Err(invalid(
-            "事例が4MiBを超えています。別の事例に分けてください",
-        ));
-    }
-    let path = directory
-        .join("revisions")
-        .join(format!("{:020}.json", workspace.revision));
-    let temporary = path.with_extension("pending");
-    write_json_new(&temporary, workspace)?;
-    // 完成したファイルだけを公開し、既存の版は置き換えない。
-    let result = fs::hard_link(&temporary, &path);
-    let _ = fs::remove_file(&temporary);
-    result
+    storage::Write::open(directory)?.save(workspace)
+}
+pub(crate) fn load_revision(directory: &Path, revision: u64) -> io::Result<Workspace> {
+    storage::load(directory, Some(revision))
 }
 pub fn initialize(
     directory: &Path,
@@ -720,7 +681,6 @@ pub fn initialize(
         fs::create_dir_all(parent)?;
     }
     fs::create_dir(directory)?;
-    fs::create_dir(directory.join("revisions"))?;
     workspace.history.push(Audit {
         revision: 1,
         unix_ms: unix_ms()?,
@@ -732,38 +692,7 @@ pub fn initialize(
     Ok(view(workspace))
 }
 pub fn load(directory: &Path) -> io::Result<Workspace> {
-    if directory.join("restore.pending").exists() {
-        return Err(invalid(
-            "復元が完了していません。復元元と新しい保存先を確認してください",
-        ));
-    }
-    let mut latest = None;
-    for entry in fs::read_dir(directory.join("revisions"))? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if name.len() == 25
-            && name.ends_with(".json")
-            && name[..20].bytes().all(|b| b.is_ascii_digit())
-        {
-            let version = name[..20].parse::<u64>().map_err(io::Error::other)?;
-            if latest.as_ref().is_none_or(|(v, _)| version > *v) {
-                latest = Some((version, entry.path()));
-            }
-        }
-    }
-    let (version, path) = latest.ok_or_else(|| invalid("事例の保存済みの版がありません"))?;
-    if fs::metadata(&path)?.len() > MAX_DOCUMENT {
-        return Err(invalid("事例が4MiBを超えています"));
-    }
-    let workspace: Workspace = read_json(&path)?;
-    if workspace.revision != version {
-        return Err(invalid("事例の版とファイル名が一致しません"));
-    }
-    validate(&workspace)?;
-    Ok(workspace)
+    storage::load(directory, None)
 }
 
 fn validate_events(manifest: &Manifest, events: &[Event]) -> io::Result<()> {
@@ -1127,8 +1056,11 @@ pub fn view(workspace: Workspace) -> WorkspaceView {
 pub fn change(directory: &Path, request: ChangeRequest) -> io::Result<WorkspaceView> {
     nonempty(&request.actor, "記入者")?;
     nonempty(&request.reason, "理由")?;
-    let _guard = lock(directory)?;
-    let mut workspace = load(directory)?;
+    if directory.join("restore.pending").exists() {
+        return Err(invalid("復元が完了していません"));
+    }
+    let writer = storage::Write::open(directory)?;
+    let mut workspace = writer.load()?;
     if workspace.revision != request.expected_revision {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -1629,7 +1561,7 @@ pub fn change(directory: &Path, request: ChangeRequest) -> io::Result<WorkspaceV
         reason: request.reason,
         operation: operation.into(),
     });
-    save_revision(directory, &workspace)?;
+    writer.save(&workspace)?;
     Ok(view(workspace))
 }
 

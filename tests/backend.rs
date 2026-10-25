@@ -339,10 +339,11 @@ fn backup_keeps_archived_policy_explanations_and_rejects_foreign_basis() {
 fn oversized_restore_is_rejected_before_creating_a_target() {
     let c = case();
     let mut archive = backup::snapshot(&c.0).unwrap();
-    for i in 0..20 {
+    // バックアップ全体の32MiB上限を超える。4MiBを超える事例自体は保存できる。
+    for i in 0..34 {
         archive.revisions[0]
             .context
-            .insert(format!("large-{i}"), "x".repeat(220000));
+            .insert(format!("large-{i}"), "x".repeat(1024 * 1024));
     }
     let target = c.0.with_file_name("oversized-restore");
     assert!(backup::restore(&target, &archive).is_err());

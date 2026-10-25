@@ -1,6 +1,7 @@
 //! 試行の中で先に起動して待つプロセス（例：画像の受信サーバー）。
 //! 準備の完了は、基盤が割り当てた 127.0.0.1 のポートへ接続できるかで確かめる。
 //! 操作するプロセスが終わった後に基盤が止め、止めたことを待つプロセスの失敗として扱わない。
+use crate::error::invalid;
 use crate::python_env::Launch;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,10 +42,6 @@ pub struct ServerPhase {
     pub stdout_excerpt: String,
     pub stderr_excerpt: String,
     pub detail: String,
-}
-
-fn invalid(text: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text.into())
 }
 
 pub fn validate(spec: &ServerSpec) -> io::Result<()> {
@@ -106,9 +103,12 @@ pub fn wait_ready(child: &mut Child, port: u16, timeout_ms: u64) -> io::Result<R
 
 /// 操作の後に待つプロセスを止める。自分で終了していたかどうかと終了コードを返す。
 pub fn stop(child: &mut Child) -> io::Result<(bool, Option<i32>)> {
-    if let Some(status) = child.try_wait()? {
+    let before = child.try_wait()?;
+    if let Some(status) = before {
         return Ok((true, status.code()));
     }
+    crate::process::kill_group(child)?;
+    // 公開APIには専用グループを作っていないChildも渡せる。
     child.kill()?;
     Ok((false, child.wait()?.code()))
 }
@@ -139,5 +139,31 @@ mod tests {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).expect("待ち受け");
         assert!(listening(port));
         drop(listener);
+    }
+}
+
+#[cfg(test)]
+mod stop_tests {
+    #[test]
+    fn stop_accepts_a_child_without_a_dedicated_group() {
+        let child = std::process::Command::new("sh")
+            .args(["-c", "exec sleep 30"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let mut child = child;
+            tx.send(super::stop(&mut child)).unwrap();
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(2));
+        if result.is_err() {
+            // SAFETY: 待機中の所有する子を、失敗した試験でも残さない。
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
+        handle.join().unwrap();
+        assert!(!result.unwrap().unwrap().0);
     }
 }

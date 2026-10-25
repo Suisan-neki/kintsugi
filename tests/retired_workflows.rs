@@ -62,6 +62,12 @@ fn retired_rules_remain_readable_but_cannot_supply_success_or_be_added() {
     });
     validate(&historical).unwrap();
     assert_eq!(view(historical.clone()).checks[0].verdict, Verdict::Unknown);
+    // 旧JSON形式を作り、移行後も過去の記録を読めることを確認する。
+    fs::remove_file(root.join("case/workspace.sqlite3")).unwrap();
+    for suffix in ["-wal", "-shm"] {
+        let _ = fs::remove_file(root.join(format!("case/workspace.sqlite3{suffix}")));
+    }
+    fs::create_dir(root.join("case/revisions")).unwrap();
     fs::write(
         root.join("case/revisions/00000000000000000001.json"),
         serde_json::to_vec(&historical).unwrap(),

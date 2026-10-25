@@ -1,4 +1,5 @@
 //! 確認する観点を選ぶ。モードの選択は試験の成功や医療業務への適合を意味しない。
+use crate::error::invalid;
 use crate::workspace::{Check, Rule, Workspace};
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -187,8 +188,4 @@ pub fn validate(workspace: &Workspace) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-fn invalid(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message)
 }

@@ -1,5 +1,6 @@
 //! 運営者の設定を起動時に読み、秘密をレスポンスや通信エラーへ含めない。
 use super::*;
+use crate::error::invalid;
 use std::time::Duration;
 use std::{fs, io::Write, path::Path};
 
@@ -10,9 +11,7 @@ struct ConnectionSettings {
     model: String,
     api_key: String,
 }
-fn invalid(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message)
-}
+
 impl Config {
     pub(super) fn validate_connection(&self) -> io::Result<()> {
         let url = url::Url::parse(&self.base_url)

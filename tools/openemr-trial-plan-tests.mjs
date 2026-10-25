@@ -94,25 +94,36 @@ test('environment must be ready and match source, URL and tested image', () => {
   }
 });
 
-test('case revision loading and CLI use actual latest snapshot and never overwrite output', t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mugiurushi-trial-plan-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const revisions = path.join(directory, 'case/revisions');
-  fs.mkdirSync(revisions, { recursive: true });
-  const { input, workspace } = fixtures();
-  fs.writeFileSync(path.join(revisions, '00000000000000000002.json'), JSON.stringify({ ...workspace, revision: 2 }));
-  fs.writeFileSync(path.join(revisions, '00000000000000000003.json'), JSON.stringify(workspace));
-  fs.writeFileSync(path.join(revisions, '00000000000000000004.pending'), '{}');
-  assert.equal(loadWorkspace(path.dirname(revisions)).revision, 3);
-  const inputPath = path.join(directory, 'input.json'), output = path.join(directory, 'change.json');
-  fs.writeFileSync(inputPath, JSON.stringify(input));
-  const args = [path.join(root, 'tools/openemr-trial-plan.mjs'), '--case', path.dirname(revisions), '--input', inputPath, '--output', output];
-  const run = () => spawnSync(process.execPath, args, { encoding: 'utf8' });
-  assert.equal(run().status, 0);
-  assert.equal(JSON.parse(fs.readFileSync(output)).expected_revision, 3);
-  const saved = fs.readFileSync(output, 'utf8');
-  assert.notEqual(run().status, 0);
-  assert.equal(fs.readFileSync(output, 'utf8'), saved);
-  fs.writeFileSync(path.join(directory, 'case/restore.pending'), '');
-  assert.throws(() => loadWorkspace(path.dirname(revisions)), /復元が完了/);
+test('JSON case input and CLI preserve evidence and never overwrite output', t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mugiurushi-trial-plan-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const {input,workspace}=fixtures();
+  const casePath=path.join(directory,'workspace.json');fs.writeFileSync(casePath,JSON.stringify(workspace));
+  assert.equal(loadWorkspace(casePath).revision,3);
+  const inputPath=path.join(directory,'input.json'),output=path.join(directory,'change.json');
+  fs.writeFileSync(inputPath,JSON.stringify(input));
+  const args=[path.join(root,'tools/openemr-trial-plan.mjs'),'--case',casePath,'--input',inputPath,'--output',output];
+  const run=()=>spawnSync(process.execPath,args,{encoding:'utf8'});
+  assert.equal(run().status,0);assert.equal(JSON.parse(fs.readFileSync(output)).expected_revision,3);
+  const saved=fs.readFileSync(output,'utf8');assert.notEqual(run().status,0);assert.equal(fs.readFileSync(output,'utf8'),saved);
+});
+
+test('directory input reads new and migrated SQLite cases through the Rust CLI', t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mugiurushi-trial-plan-store-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const binary=process.env.REVIEW_BINARY||path.join(root,'target/debug/mugiurushi');
+  const cli=(...args)=>{const r=spawnSync(binary,args,{encoding:'utf8'});assert.equal(r.status,0,r.stderr);return JSON.parse(r.stdout);};
+  const casePath=path.join(directory,'case');
+  cli('case','init',casePath,'--template','general','--id','test','--title','合成の保存試験','--actor','合成','--reason','初期化');
+  const first=loadWorkspace(casePath);assert.equal(first.revision,1);
+  const update=caseDir=>{
+    const file=path.join(directory,'change.json');fs.writeFileSync(file,JSON.stringify({expected_revision:1,actor:'合成',reason:'更新',action:{op:'set_context',key:'runtime',value:'new'}}));
+    cli('case','apply',caseDir,file);assert.equal(loadWorkspace(caseDir).revision,2);
+  };
+  update(casePath);
+  const legacy=path.join(directory,'legacy');fs.mkdirSync(path.join(legacy,'revisions'),{recursive:true});
+  fs.writeFileSync(path.join(legacy,'revisions','00000000000000000001.json'),JSON.stringify(first));
+  assert.equal(loadWorkspace(legacy).revision,1);update(legacy);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(legacy,'revisions','00000000000000000001.json'))).revision,1);
+  fs.writeFileSync(path.join(legacy,'restore.pending'),'');assert.throws(()=>loadWorkspace(legacy),/復元が完了/);
 });

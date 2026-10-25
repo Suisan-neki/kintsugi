@@ -179,7 +179,7 @@ fn malformed_api_bodies_are_rejected_after_authentication_without_changing_the_c
     let sandbox = Sandbox::new();
     let case = sandbox.case();
     let before = serde_json::to_value(load(&case).unwrap()).unwrap();
-    for route in ["change", "compare", "report-html", "repository"] {
+    for route in ["change", "compare", "report-html", "understand"] {
         let route = format!("/api/v1/{route}");
         for (token, status) in [(None, 403), (Some("test-token"), 400)] {
             let response = http(&case, "POST", &route, "{", Some("same"), token, None);
@@ -284,7 +284,7 @@ fn review_reports_require_v1_auth_and_reject_a_stale_preview() {
         );
     }
     for route in ["/api/report", "/api/report-html"] {
-        assert!(http(&case, "GET", route, "", None, None, None).starts_with("HTTP/1.1 403"));
+        assert!(http(&case, "GET", route, "", None, None, None).starts_with("HTTP/1.1 410"));
     }
     assert!(
         http(
@@ -354,10 +354,9 @@ fn review_http_rejects_cross_origin_missing_token_import_and_stale_update() {
     for (origin, token) in [
         (Some("https://unrelated.invalid"), Some("test-token")),
         (Some("same"), None),
-        (None, Some("test-token")),
     ] {
         assert!(
-            http(&case, "POST", "/api/change", &body, origin, token, None)
+            http(&case, "POST", "/api/v1/change", &body, origin, token, None)
                 .starts_with("HTTP/1.1 403")
         );
     }
@@ -365,7 +364,7 @@ fn review_http_rejects_cross_origin_missing_token_import_and_stale_update() {
         http(
             &case,
             "GET",
-            "/api/case",
+            "/api/v1/case",
             "",
             None,
             None,
@@ -378,7 +377,7 @@ fn review_http_rejects_cross_origin_missing_token_import_and_stale_update() {
         http(
             &case,
             "POST",
-            "/api/change",
+            "/api/v1/change",
             &body,
             Some("same"),
             Some("test-token"),
@@ -390,7 +389,7 @@ fn review_http_rejects_cross_origin_missing_token_import_and_stale_update() {
         http(
             &case,
             "POST",
-            "/api/change",
+            "/api/v1/change",
             &body,
             Some("same"),
             Some("test-token"),
@@ -413,7 +412,7 @@ fn review_http_rejects_cross_origin_missing_token_import_and_stale_update() {
         http(
             &case,
             "POST",
-            "/api/change",
+            "/api/v1/change",
             &importing,
             Some("same"),
             Some("test-token"),
@@ -422,7 +421,18 @@ fn review_http_rejects_cross_origin_missing_token_import_and_stale_update() {
         .starts_with("HTTP/1.1 403")
     );
     assert_eq!(load(&case).unwrap().revision, 2);
-    assert!(http(&case, "GET", "/api/case", "", None, None, None).contains("事例"));
+    assert!(
+        http(
+            &case,
+            "GET",
+            "/api/v1/case",
+            "",
+            None,
+            Some("test-token"),
+            None
+        )
+        .contains("事例")
+    );
 }
 
 fn code_reference(commit: char) -> CodeReference {
@@ -495,4 +505,47 @@ fn old_workspace_records_load_without_code_reference() {
     let workspace: Workspace = serde_json::from_value(json).unwrap();
     validate(&workspace).unwrap();
     assert!(workspace.checks.iter().all(|c| c.source.is_none()));
+}
+
+#[test]
+fn retired_api_aliases_never_return_case_backup_or_execution_data() {
+    let sandbox = Sandbox::new();
+    let case = sandbox.case();
+    for route in ["case", "backup", "execution", "profiles", "change"] {
+        for token in [None, Some("test-token")] {
+            let response = http(
+                &case,
+                "GET",
+                &format!("/api/{route}"),
+                "",
+                None,
+                token,
+                None,
+            );
+            assert!(response.starts_with("HTTP/1.1 410"), "{response}");
+            assert!(!response.contains("\"workspace\""));
+            assert!(!response.contains("\"revisions\""));
+        }
+    }
+    let response = http(
+        &case,
+        "POST",
+        "/api/v1/repository",
+        "{}",
+        Some("same"),
+        Some("test-token"),
+        None,
+    );
+    assert!(response.starts_with("HTTP/1.1 410"));
+    let forged = r#"{"operation":"analyze","repository":"example/project","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","snapshot":{"files":{"app.js":"forged"}}}"#;
+    let response = http(
+        &case,
+        "POST",
+        "/api/v1/understand",
+        forged,
+        Some("same"),
+        Some("test-token"),
+        None,
+    );
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
 }

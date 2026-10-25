@@ -1,0 +1,88 @@
+name: Live integration examples
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * 0"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  MUGIURUSHI_SOURCE_REVISION: ${{ github.sha }}
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock') }}-
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - run: cargo build --locked
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        id: playwright
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install-deps chromium
+      - if: steps.playwright.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
+      - name: Enable the OS sandbox for pinned Chromium
+        run: bash .github/scripts/chromium-sandbox.sh
+      - run: node tools/backend-demo.mjs evaluations/ci-backend --live
+      - name: Operate the app against the public repository sjl/t
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          umask 077
+          printf '%s' "$GH_TOKEN" > "$RUNNER_TEMP/github-token"
+          EEL_GITHUB_TOKEN_FILE="$RUNNER_TEMP/github-token" npm run test:reader-native -- --live
+          EEL_GITHUB_TOKEN_FILE="$RUNNER_TEMP/github-token" npm run test:app
+      - name: Send and store a DICOM image with pinned pynetdicom and pydicom
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          umask 077
+          printf '%s' "$GH_TOKEN" > "$RUNNER_TEMP/github-token"
+          EEL_GITHUB_TOKEN_FILE="$RUNNER_TEMP/github-token" npm run test:dicom
+      - run: npm run test:browser
+      - name: Exercise pinned container examples
+        run: |
+          umask 077
+          printf '%s' '{"username":"eel-operator","password":"eel-pass-trial"}' > "$RUNNER_TEMP/openemr-secrets.json"
+          EEL_BROWSER_SECRETS_FILE="$RUNNER_TEMP/openemr-secrets.json" cargo test --locked --test containers -- --ignored --nocapture
+      - name: Keep synthetic integration records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-integration-examples
+          path: |
+            test-results/
+            evaluations/ci-*/**/*.json
+            evaluations/ci-*/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Save compiled Cargo dependencies even when a check fails
+        if: ${{ !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}

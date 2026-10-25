@@ -35,10 +35,9 @@ pub fn options(model: &Model<'_>) -> Vec<Value> {
                 .map(|c| c[1].to_owned())
                 .collect::<Vec<_>>();
             let field = |name: &str| -> Option<String> {
-                let p = regex::Regex::new(&format!(
+                let p = model.budget.pattern(&format!(
                     r#"{name}\s*=\s*(['"])(.*?)['"]|{name}\s*=\s*([A-Za-z0-9_.]+)"#
-                ))
-                .expect("既定のオプション名");
+                ));
                 p.captures(&text)
                     .and_then(|c| c.get(2).or_else(|| c.get(3)))
                     .map(|m| m.as_str().to_owned())
@@ -68,14 +67,7 @@ pub fn options(model: &Model<'_>) -> Vec<Value> {
     out
 }
 fn code(file: &File, line: usize) -> String {
-    clip(
-        file.text
-            .split('\n')
-            .nth(line.saturating_sub(1))
-            .unwrap_or("")
-            .trim(),
-        200,
-    )
+    clip(file.line_text(line).unwrap_or("").trim(), 200)
 }
 fn parameters(signature: &str, python: bool) -> Vec<String> {
     let Some(c) = rx!(r"\(([\s\S]*)\)").captures(signature) else {
@@ -101,10 +93,9 @@ fn parameters(signature: &str, python: bool) -> Vec<String> {
 }
 fn handlers(model: &Model<'_>, name: &str) -> Vec<Value> {
     let escaped = regex::escape(name);
-    let pattern = regex::Regex::new(&format!(
+    let pattern = model.budget.pattern(&format!(
         r"^\s*except\b[^:]*\b{escaped}\b|\bcatch\b.*\b{escaped}\b|instanceof\s+{escaped}\b"
-    ))
-    .expect("例外名はエスケープ済み");
+    ));
     let mut found = vec![];
     for f in &model.files {
         let clean = mask(&f.text, f.path.ends_with(".rs"), f.path.ends_with(".py"));
@@ -134,11 +125,10 @@ fn test_mentions(model: &Model<'_>, names: &[String]) -> Vec<Value> {
         .iter()
         .filter(|n| n.len() > 1)
         .map(|n| {
-            regex::Regex::new(&format!(
+            model.budget.pattern(&format!(
                 r"(^|[^A-Za-z0-9_-]){}([^A-Za-z0-9_-]|$)",
                 regex::escape(n)
             ))
-            .expect("名前をエスケープしたパターン")
         })
         .collect::<Vec<_>>();
     let mut hits = vec![];
@@ -155,7 +145,7 @@ fn test_mentions(model: &Model<'_>, names: &[String]) -> Vec<Value> {
     hits
 }
 pub fn detail(model: &Model<'_>, path: &str, line: usize) -> Value {
-    let Some(file) = model.files.iter().find(|f| f.path == path) else {
+    let Some(file) = model.file(path) else {
         return json!({"found":false,"reason":format!("{path} はまだ読み取っていない"),"needed_files":[path]});
     };
     let guide = explain(model, path, line);
@@ -215,15 +205,14 @@ pub fn detail(model: &Model<'_>, path: &str, line: usize) -> Value {
     let short = fun.map_or(string(&guide["name"]), |f| string(&f["short"]));
     if owner.is_some() || array(&callers["callers"]).is_empty() {
         let constructor = owner.is_some() && short == "__init__";
-        let pattern = regex::Regex::new(&if constructor {
+        let pattern = model.budget.pattern(&if constructor {
             format!(
                 r"(^|[^A-Za-z0-9_.]){}\s*\(",
                 regex::escape(owner.expect("クラスの初期化"))
             )
         } else {
             format!(r"\.{}\s*\(", regex::escape(short))
-        })
-        .expect("名前をエスケープしたパターン");
+        });
         for f in model.files.iter().filter(|f| !snapshot::test_file(&f.path)) {
             let m = mask(&f.text, f.path.ends_with(".rs"), f.path.ends_with(".py"));
             let fns = functions(f);
@@ -251,10 +240,8 @@ pub fn detail(model: &Model<'_>, path: &str, line: usize) -> Value {
         .chain(array(&callers["callers"]))
         .filter_map(|c| {
             model
-                .files
-                .iter()
-                .find(|f| f.path == string(&c["path"]))
-                .and_then(|f| f.text.split('\n').nth(number(&c["line"]).saturating_sub(1)))
+                .file(string(&c["path"]))
+                .and_then(|f| f.line_text(number(&c["line"])))
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -264,8 +251,9 @@ pub fn detail(model: &Model<'_>, path: &str, line: usize) -> Value {
         .filter(|o| {
             o["dest"].as_str().is_some_and(|d| {
                 !d.is_empty()
-                    && regex::Regex::new(&format!(r"\b{}\b", regex::escape(d)))
-                        .expect("名前をエスケープしたパターン")
+                    && model
+                        .budget
+                        .pattern(&format!(r"\b{}\b", regex::escape(d)))
                         .is_match(&text)
             })
         })
@@ -317,12 +305,11 @@ fn origin(file: &File, effect: &Value, fun: Option<&Value>) -> Option<Value> {
     let c=rx!(r"\bopen\s*\(\s*([A-Za-z_]\w*)|\b(?:writeFile|appendFile|createWriteStream)(?:Sync)?\s*\(\s*([A-Za-z_$][\w$]*)").captures(string(&effect["code"]))?;
     let variable = c.get(1).or_else(|| c.get(2))?.as_str();
     let fun = fun?;
-    let pattern = regex::Regex::new(&format!(
+    let pattern = file.budget.pattern(&format!(
         r"(^|[^A-Za-z0-9_.]){}\s*=[^=]|for\s+.*\b{}\b.*\bin\b",
         regex::escape(variable),
         regex::escape(variable)
-    ))
-    .expect("名前をエスケープしたパターン");
+    ));
     let lines = file.text.split('\n').collect::<Vec<_>>();
     for i in
         (number(&fun["line"]).saturating_sub(1)..number(&effect["line"]).saturating_sub(1)).rev()

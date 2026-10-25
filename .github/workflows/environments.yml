@@ -1,10 +1,15 @@
 name: Pinned target environments
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * 0"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
+env:
+  MUGIURUSHI_SOURCE_REVISION: ${{ github.sha }}
 jobs:
   environment:
     runs-on: ubuntu-latest
@@ -12,9 +17,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [ohif-build, monai-cpu]
+        target: [ohif-build]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock') }}-
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal
       - run: cargo build --locked
@@ -22,13 +37,18 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.19.0
+          cache: npm
       - name: Build or infer, distinguish failures and retain dependency evidence
         run: node tools/environment-smoke.mjs ${{ matrix.target }}
-      - name: Prepare the pinned browser for OHIF
-        if: matrix.target == 'ohif-build'
-        run: |
-          npm ci --ignore-scripts
-          npx playwright install --with-deps chromium
+      - run: npm ci --ignore-scripts
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        id: playwright
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install-deps chromium
+      - if: steps.playwright.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
       - name: Observe OHIF list and images, reject image requests and retry
         if: matrix.target == 'ohif-build'
         run: node tools/ohif-smoke.mjs
@@ -46,3 +66,12 @@ jobs:
             evaluations/ci-ohif/**/*.log
           if-no-files-found: ignore
           retention-days: 7
+      - name: Save compiled Cargo dependencies even when a check fails
+        if: ${{ !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}

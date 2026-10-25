@@ -20,7 +20,7 @@ curl -H "X-Review-Token: $(cat /tmp/eel-api-token)" http://127.0.0.1:8765/api/v1
 
 APIを呼ぶクライアントは`X-Review-Token`を指定する。POSTは`Content-Type: application/json`も必要。Originがある場合は起動したlocalhostと一致する必要がある。CLIなどOriginのないクライアントはトークンで操作する。ブラウザの別OriginへのCORS許可は提供しない。同一Originへフロントエンドを配置するか、フロントエンド用サーバーからAPIへ接続する。トークンを外部へ配布しない。
 
-従来の`review CASE_DIR`と画面向けの`/api/case`・`/api/change`などは維持する。固定版を実行する場合はAPI起動にも`--repository-root DIR --execution-mode local|bubblewrap`を指定する。指定しないAPIサーバーは実行を有効にしない。現在の対応OSはLinux・macOS。Windowsの確認は未実施。
+旧`/api/case`・`/api/change`などと`/api/v1/repository`は廃止し、HTTP 410を返す。APIは`/api/v1/`を使う。固定版を実行する場合はAPI起動にも`--repository-root DIR --execution-mode local|bubblewrap`を指定する。指定しないAPIサーバーは実行を有効にしない。現在の対応OSはLinux・macOS。Unix固有の処理を使うためWindowsではビルドできない。
 
 ## APIの契約
 
@@ -33,9 +33,9 @@ APIを呼ぶクライアントは`X-Review-Token`を指定する。POSTは`Conte
 | GET `/api/v1/backup` | 操作トークン | 開始時に読んだ版までの全履歴。取得中の新しい更新は含めない |
 | GET `/api/v1/execution` | 操作トークン | 起動時に許可した固定版実行の対象・方式・現在のジョブ |
 | POST `/api/v1/execute` | expected_revision、actor、reason、recipe | 指定したリポジトリの固定版実行を受付。HTTP 202 |
-| POST `/api/v1/repository` | ReaderRequest | 公開GitHubの固定版読取、読取記録の解析、同じ固定版のファイル追加読取 |
+| POST `/api/v1/understand` | UnderstandRequest | 公開GitHubの読取、サーバーが保存した読取記録の参照・解析。コード本文は受け付けない |
 
-通常のPOST入力は1MiB、読取記録を返すrepository APIの入力は8MiBまで。更新は`expected_revision`を照合し、別の更新があればHTTP 409を返す。不正な形式や対応しない操作は400、トークン・Origin・権限の不一致は403、未定義のパスは404。同時接続は16件までで、超過時は503。失敗した更新を成功した事例版として保存しない。
+POST入力は1MiBまで。更新は`expected_revision`を照合し、別の更新があればHTTP 409を返す。不正な形式や対応しない操作は400、トークン・Origin・権限の不一致は403、未定義のパス、未保存の読取記録・構成図は404。HTTP受付にはaxumを使い、長い読取・AI処理は4件まで同時に処理する。超過時は503。失敗した更新を成功した事例版として保存しない。
 
 `ChangeRequest`は次の形を使う。利用者や入力元が期待する動作を記入する。初期条件や回答を自動では生成しない。
 
@@ -196,3 +196,25 @@ npm run test:backend
 ## 図の配置との照合（#161）
 
 GET /api/v1/architectureのlayoutsに、保存した構成モデルのmodel_id・model_versionと表示に使えるlayout_model_idを返す。図に描く構成と環境が一致しないモデルには対応を返さない。コードのコミットとモデルの版、根拠の参照はmodelsとlinksで保持する。配置の一致だけでは観測済みとしない。
+
+### 読取記録の参照
+
+`read`または`open`にGitHub URLとreferenceを渡すと、サーバーが取得したコミットと本文を保存する。`analyze`・`overview`・`architecture`・`inquire`・`function`・`file`・`plan`はrepositoryと40桁のcommitで保存済みの記録を参照する。snapshotやfilesを入力すると400を返す。ライブラリのReaderRequestによるオフライン解析はHTTPには公開しない。
+
+```json
+{"operation":"analyze","repository":"owner/repository","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path":"src/main.rs","line":1}
+```
+
+画面版のトークンはHTMLにも含まれ、同じ端末内の別プロセス・利用者を認証するものではない。API専用モードはHTMLを配信せず、所有者だけが読めるトークンファイルを使う。
+
+### 長い処理
+
+読取・AI・環境準備のPOSTに`Prefer: respond-async`を指定すると202と`kind: request`のジョブを返す。`GET /api/v1/jobs/{id}`で待機中・実行中・完了と結果のHTTPステータスを取得する。画面はこの経路を使う。ジョブは最大12件を受け付け、結果を含む履歴は最大16件をメモリーに保持する。再起動で失われる。
+
+`DELETE /api/v1/jobs/{id}`は待機中の処理を取り消す。実行開始後は結果の待受を中止するが、送信済みのAI処理や保存の完了までは取り消せない。同期クライアントはPreferなしで従来どおり結果を受け取れる。
+
+### 事例の保存形式
+
+事例は`workspace.sqlite3`へ保存する。WAL・FULL同期・トランザクションを使い、変更しない項目の本文をSHA-256で共用する。最新版は索引で参照し、版ディレクトリの全走査は行わない。書込みロックはSQLiteが管理し、プロセス終了後の手動ロック削除を不要にする。
+
+旧`revisions/*.json`は最初の読込みで全版を一つのトランザクションに取り込む。元ファイルは残すが、移行後はSQLiteを正とし、旧バイナリで同じ保存先を更新しない。従来の全版JSONバックアップと復元の形式は維持する。通常保存の上限は64MiB、互換バックアップは1000版・32MiBの上限がある。大きい保存先を複製する場合はサーバーを停止して事例ディレクトリ全体を複製する。

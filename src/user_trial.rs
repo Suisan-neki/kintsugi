@@ -1,4 +1,5 @@
 //! 人がWebアプリを試した記録。自動試験の判定や合意の記録とは分ける。
+use crate::error::invalid;
 use crate::workspace::{CodeReference, Workspace, validate_source};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -82,9 +83,6 @@ pub struct Session {
     pub feedback: Vec<Feedback>,
 }
 
-fn invalid(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message)
-}
 fn text(value: &str) -> io::Result<()> {
     if value.trim().is_empty() || value.len() > 16_384 {
         return Err(invalid("試用の記録は空でない16384バイト以内の値が必要です"));

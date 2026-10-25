@@ -38,6 +38,8 @@ pub struct File<'a> {
     pub role: &'static str,
     #[serde(skip)]
     pub budget: &'a super::budget::Budget,
+    #[serde(skip)]
+    pub line_offsets: Vec<usize>,
 }
 #[derive(Debug, Serialize)]
 pub struct Model<'a> {
@@ -48,9 +50,26 @@ pub struct Model<'a> {
     pub inventory_truncated: bool,
     pub edges: Vec<Value>,
     #[serde(skip)]
+    pub file_index: std::collections::HashMap<String, usize>,
+    #[serde(skip)]
     pub guides: std::cell::RefCell<std::collections::HashMap<(String, usize), Value>>,
     #[serde(skip)]
     pub budget: &'a super::budget::Budget,
+}
+impl File<'_> {
+    pub fn line_text(&self, line: usize) -> Option<&str> {
+        let start = *self.line_offsets.get(line.checked_sub(1)?)?;
+        let end = self
+            .line_offsets
+            .get(line)
+            .map_or(self.text.len(), |n| n.saturating_sub(1));
+        self.text.get(start..end)
+    }
+}
+impl Model<'_> {
+    pub fn file(&self, path: &str) -> Option<&File<'_>> {
+        self.file_index.get(path).and_then(|i| self.files.get(*i))
+    }
 }
 pub fn line_at(s: &str, n: usize) -> usize {
     s.as_bytes()[..n].iter().filter(|b| **b == b'\n').count() + 1
@@ -653,6 +672,9 @@ pub fn analyze<'a>(s: &'a Snapshot, budget: &'a super::budget::Budget) -> Model<
             File {
                 path: path.to_owned(),
                 text: t.to_owned(),
+                line_offsets: std::iter::once(0)
+                    .chain(t.match_indices('\n').map(|(i, _)| i + 1))
+                    .collect(),
                 symbols: symbols(path, t, budget),
                 imports,
                 bindings,
@@ -698,8 +720,14 @@ pub fn analyze<'a>(s: &'a Snapshot, budget: &'a super::budget::Budget) -> Model<
         .iter()
         .flat_map(|f| f.imports.iter().map(|e| json!(e)))
         .collect();
+    let file_index = files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.path.clone(), i))
+        .collect();
     Model {
         files,
+        file_index,
         entries,
         scripts,
         inventory: &s.inventory,

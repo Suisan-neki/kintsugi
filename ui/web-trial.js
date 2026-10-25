@@ -1,6 +1,6 @@
+import { apiRequest } from "./api.js";
 // 人が操作した内容は自己申告として保存する。リンクを開いただけで試用済みにはしない。
 const $ = id => document.getElementById(id);
-const token = document.querySelector('meta[name="review-token"]').content;
 let view, busy = false, displacedDraft = null, handoffRevision = null;
 let sessionId = new URL(location.href).searchParams.get('session');
 const outcomes = { completed: '操作を終えた', blocked: '途中で進めなくなった', not_tried: '試せなかった' };
@@ -24,16 +24,7 @@ const text = (id, attrs = {}) => h('input', { id, class: 'system-input', require
 const area = (id, attrs = {}) => h('textarea', { id, class: 'system-input', required: true, rows: 3, maxlength: 4000, ...attrs });
 const detail = (title, ...body) => h('details', {}, h('summary', {}, title), ...body);
 const read = id => $(id).value.trim();
-async function api(method, path, body) {
-  const response = await fetch('/api/v1/' + path, { method, headers: { 'X-Review-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
-  const result = await response.json();
-  if (!response.ok) {
-    const error = new Error(result.error || `HTTP ${response.status}`);
-    error.status = response.status;
-    throw error;
-  }
-  return result;
-}
+const api = (method, path, body) => apiRequest(method, '/api/v1/' + path, body);
 async function guarded(task) {
   if (busy) return;
   busy = true;
@@ -113,7 +104,7 @@ function renderSession() {
   const records = session.feedback.map(entry => h('article', { class: 'box' }, h('h3', {}, entry.variant.toUpperCase() + 'の記録'),
     h('p', {}, outcomes[entry.outcome]), h('p', {}, '実際の操作：', entry.operation), h('p', {}, '感想・理由：', entry.feedback),
     h('p', { class: 'note' }, '本人の申告として保存した記録です。')));
-  const content = [h('p', {}, `参加者：${session.participant}　順番：${session.order.map(x => x.toUpperCase()).join(' → ')}`), planDetails(plan), ...records];
+  const content = [h('p', {}, `参加者：${session.participant}\u3000順番：${session.order.map(x => x.toUpperCase()).join(' → ')}`), planDetails(plan), ...records];
   if (!planCurrent(plan)) content.splice(2, 0, h('p', { class: 'note', role: 'status' }, 'この試用を始めた後に、現在の検証条件が変わっています。ここで保存する感想は、上に表示した試用計画と版への記録として残ります。現在の条件で試した結果には置き換えません。'));
   if (next) {
     const variant = plan.variants.find(v => v.label === next);

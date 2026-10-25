@@ -95,11 +95,12 @@ fn collision(file: &File, name: &str, r: &Range) -> bool {
     let escaped = regex::escape(name);
     let parameters = rx!(r"\(([\s\S]*)\)").captures(header);
     if let Some(p) = parameters
-        && regex::Regex::new(&format!(
-            r"(?:^|[^A-Za-z0-9_$]){escaped}(?:$|[^A-Za-z0-9_$])"
-        ))
-        .expect("名前をエスケープしたパターン")
-        .is_match(&p[1])
+        && file
+            .budget
+            .pattern(&format!(
+                r"(?:^|[^A-Za-z0-9_$]){escaped}(?:$|[^A-Za-z0-9_$])"
+            ))
+            .is_match(&p[1])
     {
         return true;
     }
@@ -110,7 +111,7 @@ fn collision(file: &File, name: &str, r: &Range) -> bool {
     } else {
         head_end.min(end)
     };
-    regex::Regex::new(&format!(r"(?-u:\b)(?:let|const|var|fn|function|def|class)\s+(?:mut\s+)?{escaped}(?:$|[^A-Za-z0-9_$])|(?:^|\n)\s*{escaped}\s*=")).expect("名前をエスケープしたパターン").is_match(&clean[start..end])
+    file.budget.pattern(&format!(r"(?-u:\b)(?:let|const|var|fn|function|def|class)\s+(?:mut\s+)?{escaped}(?:$|[^A-Za-z0-9_$])|(?:^|\n)\s*{escaped}\s*=")).is_match(&clean[start..end])
 }
 fn targets(model: &Model<'_>, file: &File, name: &str, r: &Range) -> Value {
     let parts = rx!(r"::|\.").split(name).collect::<Vec<_>>();
@@ -290,7 +291,7 @@ pub fn explain(model: &Model<'_>, path: &str, selected: usize) -> Value {
     let signature = if let Some(h) = r.header {
         file.text[start..h].trim()
     } else {
-        file.text.split('\n').nth(r.start - 1).unwrap_or("").trim()
+        file.line_text(r.start).unwrap_or("").trim()
     };
     let truncated = steps.len() > 80 || calls.len() > 80;
     steps.truncate(80);

@@ -1,4 +1,5 @@
 //! 言語・実行環境を限定しない、外部から報告された観測。実行証明には使わない。
+use crate::error::invalid;
 use crate::{
     execution::{Criterion, ObservationOutcome},
     model::*,
@@ -30,9 +31,7 @@ pub struct ReportedTrace {
     pub context: BTreeMap<String, serde_json::Value>,
     pub observations: Vec<ReportedObservation>,
 }
-fn invalid(text: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text)
-}
+
 fn text(value: &str) -> io::Result<()> {
     if value.trim().is_empty() || value.len() > 16384 {
         return Err(invalid(

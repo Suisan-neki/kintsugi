@@ -1,6 +1,7 @@
 //! 試験専用のコンテナを、試行ごとに作って止めて消す。
 //! イメージはダイジェスト（`@sha256:` と64桁）付きだけを受け付ける。タグだけでは起動しない。
 //! 待ち受けは 127.0.0.1 だけに公開する。Dockerが使えないときはほかの方式へ切り替えない。
+use crate::error::invalid;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -155,10 +156,6 @@ struct Running {
     ready_after_ms: Option<u64>,
     detail: String,
     web_build: Option<crate::prepared_web::BuildBasis>,
-}
-
-fn invalid(text: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text.into())
 }
 
 pub fn image_digest(image: &str) -> Option<&str> {

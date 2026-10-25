@@ -42,7 +42,8 @@ try {
  const compared=await fetch(url+'/api/v1/compare',{method:'POST',headers,body:JSON.stringify({expected_revision:state.workspace.revision,check_id:'delivered',before_id:'evidence-1',after_id:'evidence-3'})});assert.equal(compared.status,200);const comparison=await compared.json();assert.equal(comparison.before.evidence.observed.verdict,'not_satisfied');assert.equal(comparison.after.evidence.observed.verdict,'unknown');
  r=await fetch(url+'/api/v1/compare',{method:'POST',headers,body:JSON.stringify({expected_revision:state.workspace.revision,check_id:'delivered',before_id:'evidence-1',after_id:'evidence-1'})});assert.equal(r.status,400);
  const snapshot={schema:1,fullName:'example/project',commit:'a'.repeat(40),reference:'main',truncated:false,files:{'app.js':'import {save as persist} from "./store.js";\nfunction main(){persist();}','store.js':'export function save(){}'},inventory:[{path:'app.js',size:80,mode:'100644'},{path:'store.js',size:24,mode:'100644'}],omitted:[]};
- const analysisResponse=await fetch(url+'/api/v1/repository',{method:'POST',headers,body:JSON.stringify({operation:'analyze',snapshot,path:'app.js',line:2})});assert.equal(analysisResponse.status,200);const analysis=await analysisResponse.json();assert.equal(analysis.guide.calls[0].candidates[0].path,'store.js');
+ const snapshotDirectory=join(casePath,'snapshots',snapshot.fullName);await mkdir(snapshotDirectory,{recursive:true});await writeFile(join(snapshotDirectory,snapshot.commit+'.json'),JSON.stringify(snapshot));
+ const analysisResponse=await fetch(url+'/api/v1/understand',{method:'POST',headers,body:JSON.stringify({operation:'analyze',repository:snapshot.fullName,commit:snapshot.commit,path:'app.js',line:2})});assert.equal(analysisResponse.status,200);const analysis=await analysisResponse.json();assert.equal(analysis.guide.calls[0].candidates[0].path,'store.js');
  // 途中のHTTPリクエストがあっても、別接続で事例を読める。
  socket=net.createConnection(new URL(url).port,'127.0.0.1');await new Promise(resolve=>socket.once('connect',resolve));socket.write('GET /api/v1/case HTTP/1.1\r\n');
  const start=Date.now();await get('/api/v1/case');assert.ok(Date.now()-start<2000,'a stalled client blocked other requests');socket.destroy();
@@ -54,10 +55,10 @@ try {
  const cliBackup=join(output,'cli-backup.json');execFileSync(binary,['case','backup',casePath,'--output',cliBackup]);assert.deepEqual(JSON.parse(await readFile(cliBackup,'utf8')),saved);
  let liveReader=null;
  if(process.argv.includes('--live')) {
-  const response=await fetch(url+'/api/v1/repository',{method:'POST',headers,body:JSON.stringify({operation:'read',url:'https://github.com/Suisan-neki/mugiurushi',reference:'63c8dac0789ed712f267a9956f5f012c645aea88'})});
+  const response=await fetch(url+'/api/v1/understand',{method:'POST',headers,body:JSON.stringify({operation:'read',url:'https://github.com/Suisan-neki/mugiurushi',reference:'63c8dac0789ed712f267a9956f5f012c645aea88'})});
   const body=await response.json();assert.equal(response.status,200,body.error);
-  assert.equal(body.snapshot.commit,'63c8dac0789ed712f267a9956f5f012c645aea88');
-  liveReader={commit:body.snapshot.commit,inventory:body.snapshot.inventory.length,read_files:Object.keys(body.snapshot.files).length};
+  assert.equal(body.source.commit,'63c8dac0789ed712f267a9956f5f012c645aea88');
+  liveReader={commit:body.source.commit,inventory:body.source.inventory.length,read_files:body.source.files_read.length};
  }
  const result={schema_version:1,live_reader:liveReader,case_revision:state.workspace.revision,checks:['versioned API','token and origin','generic reported fail/pass/missing/conflict/incomplete','foreign correlation rejected','stale revision rejected','historical decision basis','Rust comparison via API and CLI','static repository analysis API','reads during stalled connection','all-revision backup and restore','existing restore target rejected'],scope:'synthetic inputs; no arbitrary application execution or human evaluation',comparison};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2));await writeFile(join(output,'analysis.json'),JSON.stringify(analysis,null,2));console.log(JSON.stringify({output,checks:result.checks,human_evaluation:'not_conducted'}));

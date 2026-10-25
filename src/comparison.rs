@@ -1,4 +1,5 @@
 //! 同じ確認事項の二つの取り込みを比較する。判定はworkspaceの規則を共有する。
+use crate::error::invalid;
 use crate::workspace::{self, CodeReference, Evidence, EvidenceView, Workspace};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -36,9 +37,7 @@ pub struct TrialComparison {
     pub differences: Vec<Difference>,
     pub limits: Vec<String>,
 }
-fn invalid(text: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text)
-}
+
 pub fn compare(workspace: Workspace, request: CompareRequest) -> io::Result<TrialComparison> {
     workspace::validate(&workspace)?;
     if workspace.revision != request.expected_revision {
