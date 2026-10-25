@@ -76,7 +76,45 @@ pub struct Service {
 #[serde(deny_unknown_fields)]
 pub struct ContainerSpec {
     pub services: Vec<Service>,
+    /// 対象のコンテナから外部への通信。指定しなければ遮断する。
+    #[serde(default, skip_serializing_if = "Egress::is_blocked")]
+    pub egress: Egress,
 }
+
+/// 試験用ネットワークの外部通信。`Allowed`は対象が外部へ通信できることを記録に残す。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Egress {
+    #[default]
+    Blocked,
+    Allowed,
+}
+impl Egress {
+    fn is_blocked(&self) -> bool {
+        *self == Self::Blocked
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Blocked => "blocked",
+            Self::Allowed => "allowed",
+        }
+    }
+}
+
+/// 遮断時に、ホストの127.0.0.1と内部ネットワークの間だけを中継するコンテナ。対象ではなく基盤が使う。
+const GATEWAY_IMAGE: &str =
+    "nginx@sha256:4ff102c5d78d254a6f0da062b3cf39eaf07f01eec0927fd21e219d0af8bc0591";
+const GATEWAY_PORT: u16 = 8080;
+/// 対象のコンテナに残す権限。ほかはすべて外す。
+const KEPT_CAPABILITIES: [&str; 6] = [
+    "CHOWN",
+    "DAC_OVERRIDE",
+    "FOWNER",
+    "SETGID",
+    "SETUID",
+    "NET_BIND_SERVICE",
+];
+const PIDS_LIMIT: &str = "2048";
 
 /// コンテナへ基盤が行うHTTP操作。対象プロセスの起動とは別。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +151,13 @@ pub struct ServicePhase {
 pub struct ContainerPhase {
     pub engine: String,
     pub network: String,
+    /// 外部通信の方針（blocked/allowed）。古い記録にはない。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub egress: String,
+    /// 基盤が試験用ネットワークを読み出して、外部へ出る経路がないと確認できたか。
+    #[serde(default)]
+    pub egress_confirmed: bool,
+
     pub volumes: Vec<String>,
     pub services: Vec<ServicePhase>,
     pub leftovers: Vec<String>,
@@ -140,6 +185,9 @@ pub struct HttpResult {
 pub struct Session {
     trial: String,
     network: String,
+    edge: String,
+    egress: Egress,
+    egress_confirmed: bool,
     volumes: Vec<String>,
     services: Vec<Running>,
     engine: String,
@@ -156,6 +204,7 @@ struct Running {
     ready_after_ms: Option<u64>,
     detail: String,
     web_build: Option<crate::prepared_web::BuildBasis>,
+    gateway: Option<String>,
 }
 
 pub fn image_digest(image: &str) -> Option<&str> {
@@ -384,20 +433,44 @@ impl Session {
         let mut session = Self {
             trial: trial.clone(),
             network: network.clone(),
+            edge: String::new(),
+            egress: spec.egress,
+            egress_confirmed: false,
             volumes: vec![],
             services: vec![],
             engine,
             cleaned: false,
         };
-        docker_text(&[
-            "network",
-            "create",
-            "--label",
-            "eel.managed=1",
-            "--label",
-            &format!("eel.trial={trial}"),
-            &network,
-        ])?;
+        let mut create = vec!["network", "create", "--label", "eel.managed=1"];
+        let label = format!("eel.trial={trial}");
+        create.extend(["--label", &label]);
+        if spec.egress == Egress::Blocked {
+            create.push("--internal");
+        }
+        create.push(&network);
+        docker_text(&create)?;
+        if spec.egress == Egress::Blocked {
+            let internal =
+                docker_text(&["network", "inspect", "--format", "{{.Internal}}", &network]);
+            session.egress_confirmed = internal.is_ok_and(|v| v == "true");
+            if !session.egress_confirmed {
+                let _ = session.cleanup();
+                return Err(io::Error::other(
+                    "試験用ネットワークが外部通信を遮断する設定になっていません。実行を止めました",
+                ));
+            }
+            let edge = format!("{network}-edge");
+            docker_text(&[
+                "network",
+                "create",
+                "--label",
+                "eel.managed=1",
+                "--label",
+                &label,
+                &edge,
+            ])?;
+            session.edge = edge;
+        }
         let mut volume_names = std::collections::BTreeSet::new();
         for service in &spec.services {
             for volume in &service.volumes {
@@ -452,7 +525,6 @@ impl Session {
         let digest = pull(&service.image)?;
         let port = crate::server::free_port()?;
         let container = format!("eel-{}-{}", self.trial, service.name);
-        let publish = format!("127.0.0.1:{port}:{}", service.expose);
         let mut args = vec![
             "run".into(),
             "-d".into(),
@@ -468,11 +540,14 @@ impl Session {
             self.network.clone(),
             "--network-alias".into(),
             service.name.clone(),
-            "--publish".into(),
-            publish,
             "--restart".into(),
             "no".into(),
         ];
+        if self.egress == Egress::Allowed {
+            args.push("--publish".into());
+            args.push(format!("127.0.0.1:{port}:{}", service.expose));
+        }
+        harden(&mut args);
         for (key, value) in &service.env {
             args.push("--env".into());
             args.push(format!("{key}={value}"));
@@ -504,6 +579,17 @@ impl Session {
         } else {
             docker_text(&arg_refs)?;
         }
+        let gateway = if self.egress == Egress::Blocked {
+            match self.start_gateway(service, port) {
+                Ok(name) => Some(name),
+                Err(error) => {
+                    let _ = docker(&["rm", "-f", &container]);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         let mut running = Running {
             spec: service.clone(),
             container,
@@ -514,6 +600,7 @@ impl Session {
             ready_after_ms: None,
             detail: String::new(),
             web_build: assets.as_ref().map(|s| s.basis.clone()),
+            gateway,
         };
         match wait_ready(&running) {
             Ok(ms) => {
@@ -529,6 +616,53 @@ impl Session {
         }
         self.services.push(running);
         Ok(())
+    }
+
+    /// 内部ネットワークの対象へ、ホストの127.0.0.1から届く経路だけを作る。対象は外へ出られない。
+    fn start_gateway(&self, service: &Service, port: u16) -> io::Result<String> {
+        pull(GATEWAY_IMAGE)?;
+        let name = format!("eel-{}-{}-gw", self.trial, service.name);
+        let config = format!(
+            "user root;pid /tmp/gw.pid;error_log /dev/stderr warn;events{{}}stream{{resolver 127.0.0.11 valid=1s;server{{listen {GATEWAY_PORT};set $upstream {}:{};proxy_half_close on;proxy_pass $upstream;}}}}",
+            service.name, service.expose
+        );
+        let script = format!(
+            "printf '%s' '{config}' > /tmp/gw.conf && exec nginx -c /tmp/gw.conf -g 'daemon off;'"
+        );
+        let mut args: Vec<String> = vec![
+            "create".into(),
+            "--name".into(),
+            name.clone(),
+            "--label".into(),
+            "eel.managed=1".into(),
+            "--label".into(),
+            format!("eel.trial={}", self.trial),
+            "--label".into(),
+            "eel.role=gateway".into(),
+            "--network".into(),
+            self.edge.clone(),
+            "--publish".into(),
+            format!("127.0.0.1:{port}:{GATEWAY_PORT}"),
+            "--restart".into(),
+            "no".into(),
+        ];
+        harden(&mut args);
+        args.extend([
+            "--entrypoint".into(),
+            "sh".into(),
+            GATEWAY_IMAGE.into(),
+            "-c".into(),
+            script,
+        ]);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        docker_text(&refs)?;
+        let started = docker_text(&["network", "connect", &self.network, &name])
+            .and_then(|_| docker_text(&["start", &name]));
+        if let Err(error) = started {
+            let _ = docker(&["rm", "-f", &name]);
+            return Err(error);
+        }
+        Ok(name)
     }
 
     pub fn ports(&self) -> BTreeMap<String, u16> {
@@ -607,7 +741,6 @@ impl Session {
         let spec = self.services[index].spec.clone();
         let port = self.services[index].port;
         let container = self.services[index].container.clone();
-        let publish = format!("127.0.0.1:{port}:{}", spec.expose);
         let mut args = vec![
             "run".into(),
             "-d".into(),
@@ -621,11 +754,14 @@ impl Session {
             self.network.clone(),
             "--network-alias".into(),
             name,
-            "--publish".into(),
-            publish,
             "--restart".into(),
             "no".into(),
         ];
+        if self.egress == Egress::Allowed {
+            args.push("--publish".into());
+            args.push(format!("127.0.0.1:{port}:{}", spec.expose));
+        }
+        harden(&mut args);
         for (key, value) in &spec.env {
             args.push("--env".into());
             args.push(format!("{key}={value}"));
@@ -795,11 +931,16 @@ impl Session {
     pub fn snapshot(&self) -> ContainerPhase {
         for service in &self.services {
             let _ = docker(&["stop", "-t", "2", &service.container]);
+            if let Some(gateway) = &service.gateway {
+                let _ = docker(&["stop", "-t", "2", gateway]);
+            }
         }
         let leftovers = labeled(&self.trial);
         ContainerPhase {
             engine: self.engine.clone(),
             network: self.network.clone(),
+            egress: self.egress.label().into(),
+            egress_confirmed: self.egress_confirmed,
             volumes: self.volumes.clone(),
             services: self
                 .services
@@ -836,7 +977,13 @@ impl Session {
 
     pub fn cleanup(&mut self) -> io::Result<Vec<String>> {
         for service in self.services.iter().rev() {
+            if let Some(gateway) = &service.gateway {
+                let _ = docker(&["rm", "-f", gateway]);
+            }
             let _ = docker(&["rm", "-f", &service.container]);
+        }
+        if !self.edge.is_empty() {
+            let _ = docker(&["network", "rm", &self.edge]);
         }
         if !self.network.is_empty() {
             let _ = docker(&["network", "rm", &self.network]);
@@ -862,6 +1009,25 @@ impl Drop for Session {
         if !self.cleaned {
             let _ = self.cleanup();
         }
+    }
+}
+
+/// 対象とゲートウェイのコンテナから、既定で付く権限を減らす。
+fn harden(args: &mut Vec<String>) {
+    args.extend(
+        [
+            "--security-opt",
+            "no-new-privileges",
+            "--cap-drop",
+            "ALL",
+            "--pids-limit",
+            PIDS_LIMIT,
+        ]
+        .map(String::from),
+    );
+    for capability in KEPT_CAPABILITIES {
+        args.push("--cap-add".into());
+        args.push(capability.into());
     }
 }
 
@@ -1136,6 +1302,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn egress_defaults_to_blocked_and_is_omitted_from_old_settings() {
+        let spec: ContainerSpec = serde_json::from_str(r#"{"services":[]}"#).unwrap();
+        assert_eq!(spec.egress, Egress::Blocked);
+        assert!(!serde_json::to_string(&spec).unwrap().contains("egress"));
+        let allowed: ContainerSpec =
+            serde_json::from_str(r#"{"services":[],"egress":"allowed"}"#).unwrap();
+        assert!(serde_json::to_string(&allowed).unwrap().contains("allowed"));
+    }
+
+    #[test]
+    fn hardening_drops_all_capabilities_then_adds_the_kept_ones() {
+        let mut args = vec![];
+        harden(&mut args);
+        let text = args.join(" ");
+        assert!(text.contains("--cap-drop ALL"));
+        assert!(text.contains("no-new-privileges"));
+        assert!(!text.contains("--cap-add SYS_ADMIN"));
+        assert_eq!(text.matches("--cap-add").count(), KEPT_CAPABILITIES.len());
+    }
+
+    #[test]
     fn digest_is_required() {
         assert!(image_digest("nginx:1.27.4-alpine").is_none());
         assert!(image_digest(
@@ -1155,6 +1342,7 @@ mod tests {
                 ready: ReadyCheck::Tcp,
                 ready_timeout_ms: 5000,
             }],
+            egress: Egress::default(),
         };
         assert!(validate_spec(&spec).is_err());
     }
@@ -1174,6 +1362,7 @@ mod tests {
                 ready: ReadyCheck::Http { path: "/".into(), tls: false },
                 ready_timeout_ms: 5000,
             }],
+            egress: Egress::default(),
         };
         assert!(validate_spec(&spec).is_ok());
         assert!(
