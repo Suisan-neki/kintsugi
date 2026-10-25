@@ -197,8 +197,8 @@ impl Store {
                 if question.trim().is_empty() && path.is_none() {
                     return Err(invalid("質問を入力するか、関数を選んでください"));
                 }
-                if question.len() > 2000 {
-                    return Err(invalid("質問は2000バイト以内です"));
+                if question.len() > 6000 || question.chars().count() > 2000 {
+                    return Err(invalid("質問は2000文字・6000バイト以内です"));
                 }
                 let snapshot = self.load(&repository, &commit)?;
                 let output = reader::read(ReaderRequest::Inquire {

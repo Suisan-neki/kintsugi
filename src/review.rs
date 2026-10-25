@@ -322,7 +322,13 @@ fn handle_connection_mode(
             "repository",
         ];
         if app.is_some() {
-            routes.extend(["understand", "prepare", "ai", "system-diagram"]);
+            routes.extend([
+                "understand",
+                "prepare",
+                "ai",
+                "system-diagram",
+                "browser-recipes",
+            ]);
         }
         return json(
             stream,
@@ -377,6 +383,9 @@ fn handle_connection_mode(
             }
             ("GET", "/api/v1/ai") => {
                 return result_response(stream, Ok(crate::ai::status(app.ai.as_ref())));
+            }
+            ("GET", "/api/v1/browser-recipes") => {
+                return result_response(stream, crate::browser_recipes::catalog());
             }
             ("POST", "/api/v1/system-diagram") => {
                 let result = parse_body::<crate::system_diagram::Request>(&request.body)

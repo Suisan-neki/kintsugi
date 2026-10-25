@@ -9,6 +9,8 @@ import { chromium } from 'playwright';
 import { startSyntheticArchitectureAI } from './system-diagram-fixture.mjs';
 const root=resolve(import.meta.dirname,'..'), temp=await mkdtemp(join(tmpdir(),'eel-dialogue-')), data=join(temp,'app');
 const snapshot=JSON.parse(await readFile(join(root,'tests/fixtures/reader/system.json'),'utf8'));
+snapshot.inventory.push({path:'interface/forms/soap/save.php',mode:'100644'});
+snapshot.files['interface/forms/soap/save.php']="<?php\nsqlInsert('form_soap', $value);\n";
 await mkdir(join(data,'snapshots',snapshot.fullName),{recursive:true});
 await writeFile(join(data,'snapshots',snapshot.fullName,snapshot.commit+'.json'),JSON.stringify(snapshot));
 const native=process.env.EEL_DIALOGUE_NATIVE==='1';
@@ -25,6 +27,7 @@ const dify=createServer(async(req,res)=>{
       assert.ok(context.architecture.nodes.some(n=>n.id===context.selected_element));
       const ready=Boolean(query.previous_record?.expectation)||query.message.includes('開き直して');
       const record={concern:query.previous_record?.concern||query.message,actor:ready?'私':'',operation:ready?'保存して画面を開き直す':'',expectation:ready?'保存後に画面を開き直しても同じ内容を読める':'',related_object_ids:context.architecture.nodes.filter(n=>['api','database'].includes(n.role)).map(n=>n.id),claims:[{text:'APIが定義されている',refs:[{path:'server/main.py',line:3,end_line:3}]}],unknowns:['保存後の再読込は未検証です。'],test_plan:ready?[{operation:'架空のメモを保存して画面を開き直す',expected:'同じ内容を読める',observe:'保存時の表示と開き直した後の本文'}]:[],reported_observations:[],improvement_ideas:[]};
+      if(query.message.includes('SOAP')) record.claims=[{text:'form_soapへの書込関数を呼ぶ記述がある',refs:[{path:'interface/forms/soap/save.php',line:2,end_line:2}]}];
       if(invalidMode==='object')record.related_object_ids=['invented_store'];
       if(invalidMode==='ref')record.claims[0].refs[0].line=999;
       const envelope={request_id:invalidMode==='stale'?'previous-request':query.request_id,record};
@@ -75,6 +78,8 @@ try{
     assert.equal((await post('system-diagram/dialogue/read',{...binding,object_id:null})).body.turn,0);
     assert.equal((await post('system-diagram/dialogue/read',{...binding,revision:'f'.repeat(64)})).status,400);
     assert.equal((await fetch(url+'/dify.json',{headers})).status,404);assert.ok(!JSON.stringify(await read()).includes('private-key'));
+    r=await ask('SOAPの保存処理は？',3,'developer');assert.equal(r.status,200,JSON.stringify(r.body));assert.equal(r.body.claims[0].refs[0].path,'interface/forms/soap/save.php');assert.equal(r.body.claims[0].references_in_context,true);
+    if(!native){assert.equal(calls.at(-1).body.conversation_id,'');assert.match(calls.at(-1).context.code_excerpts,/form_soap/);assert.ok(calls.at(-1).query.previous_record);}
     console.log(JSON.stringify({checks:['Dify blocking chat and conversation variables protocol','same conversation ID and previous record','reject invented object, invalid refs and stale request','optimistic concurrency','no automatic checks, evidence or agreement','human-edited expectation and unknowns retained','reported missing observation reaches same conversation','audience changes without changing record','selection and diagram isolation','credentials stay on server'],backend:native?'native':'synthetic_dify',browser:'not_run',actual_dify_api:'not_connected',actual_target_execution:'not_conducted'}));
   }else{
   browser=await chromium.launch({headless:true,executablePath:process.env.REVIEW_BROWSER_EXECUTABLE||undefined,args:['--no-sandbox']});

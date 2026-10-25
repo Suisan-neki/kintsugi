@@ -4,6 +4,7 @@ pub mod architecture;
 pub mod backup;
 pub mod browser;
 pub mod browser_evidence;
+pub mod browser_recipes;
 pub mod comparison;
 pub mod container;
 pub mod environment;

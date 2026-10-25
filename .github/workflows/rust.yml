@@ -33,6 +33,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:journey
       - run: npm run test:dialogue
+      - run: npm run test:browser-handoff
       - run: npm run test:user-trial
       - name: Operate the app against the public repository sjl/t
         env:
