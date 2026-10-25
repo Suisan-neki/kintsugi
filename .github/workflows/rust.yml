@@ -106,11 +106,11 @@ jobs:
       - run: npx playwright install-deps chromium
       - if: steps.playwright.outputs.cache-hit != 'true'
         run: npx playwright install chromium
+      - run: npm run test:browser
       - run: npm run test:journey
       - run: npm run test:dialogue
       - run: npm run test:browser-handoff
       - run: npm run test:user-trial
-      - run: npm run test:browser
       - name: Keep synthetic review screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

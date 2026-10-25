@@ -35,7 +35,7 @@ APIを呼ぶクライアントは`X-Review-Token`を指定する。POSTは`Conte
 | POST `/api/v1/execute` | expected_revision、actor、reason、recipe | 指定したリポジトリの固定版実行を受付。HTTP 202 |
 | POST `/api/v1/understand` | UnderstandRequest | 公開GitHubの読取、サーバーが保存した読取記録の参照・解析。コード本文は受け付けない |
 
-POST入力は1MiBまで。更新は`expected_revision`を照合し、別の更新があればHTTP 409を返す。不正な形式や対応しない操作は400、トークン・Origin・権限の不一致は403、未定義のパスは404。HTTP受付にはaxumを使い、長い読取・AI処理は4件まで同時に処理する。超過時は503。失敗した更新を成功した事例版として保存しない。
+POST入力は1MiBまで。更新は`expected_revision`を照合し、別の更新があればHTTP 409を返す。不正な形式や対応しない操作は400、トークン・Origin・権限の不一致は403、未定義のパス、未保存の読取記録・構成図は404。HTTP受付にはaxumを使い、長い読取・AI処理は4件まで同時に処理する。超過時は503。失敗した更新を成功した事例版として保存しない。
 
 `ChangeRequest`は次の形を使う。利用者や入力元が期待する動作を記入する。初期条件や回答を自動では生成しない。
 

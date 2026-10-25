@@ -78,7 +78,7 @@ try{
     v=await view();const c=v.workspace.checks[0];trace.source=c.source;await change({op:'import_reported',condition:{id:c.id,version:c.version,text:c.text,origin:c.origin,kind:'custom'},trace});
     r=await ask('この結果から何が分かる？',2,'developer');assert.equal(r.status,200,JSON.stringify(r.body));assert.equal(queries().at(-1).query.results.checks[0].result.verdict,'unknown');assert.equal(queries().at(-1).query.audience,'技術者');assert.equal(r.body.turn,3);
     assert.equal((await post('system-diagram/dialogue/read',{...binding,object_id:null})).body.turn,0);
-    assert.equal((await post('system-diagram/dialogue/read',{...binding,revision:'f'.repeat(64)})).status,400);
+    assert.equal((await post('system-diagram/dialogue/read',{...binding,revision:'f'.repeat(64)})).status,404);
     assert.equal((await fetch(url+'/dify.json',{headers})).status,404);assert.ok(!JSON.stringify(await read()).includes('private-key'));
     r=await ask('SOAPの保存処理は？',3,'developer');assert.equal(r.status,200,JSON.stringify(r.body));assert.equal(r.body.claims[0].refs[0].path,'interface/forms/soap/save.php');assert.equal(r.body.claims[0].references_in_context,true);
     if(!native){assert.equal(calls.at(-1).body.conversation_id,'');assert.match(calls.at(-1).context.code_excerpts,/form_soap/);assert.ok(calls.at(-1).query.previous_record);}
@@ -139,7 +139,7 @@ try{
   }
   await page.getByRole('link',{name:'構成図と疑問に戻る',exact:true}).click();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
   assert.equal((await post('system-diagram/dialogue/read',{...binding,object_id:null})).body.turn,0);
-  assert.equal((await post('system-diagram/dialogue/read',{...binding,revision:'f'.repeat(64)})).status,400);
+  assert.equal((await post('system-diagram/dialogue/read',{...binding,revision:'f'.repeat(64)})).status,404);
   // 試す版を変え、元の図へ戻って再び検証へ進んでも、図と試験のコミットを混ぜない。
   await change({op:'bind_source',check_id:check.id,source:{...check.source,commit:trialCommit}});
   await page.reload();await page.locator('.dialogue-history summary',{hasText:'3往復'}).waitFor();
