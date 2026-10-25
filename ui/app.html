@@ -4,29 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="review-token" content="__REVIEW_TOKEN__">
-<title>麦漆（mugiurushi）｜システムを理解して、確かめる</title>
+<title>麦漆（mugiurushi）｜医療システムの技術的な検証</title>
 <style>__APP_STYLE__</style>
 </head>
 <body>
 <a class="skip-link" href="#main">本文へ移動</a>
-<header class="site-header"><div class="container system-header"><a class="site-title" href="/">麦漆｜システムを理解して、確かめる</a><button id="change-audience" class="dads-button" data-type="text" data-size="sm" type="button" hidden></button></div></header>
-<nav class="container" aria-label="利用者の試用"><p><a href="/user-trial">変更前後のアプリを試して、感想を残す</a></p></nav>
+<header class="site-header"><div class="container system-header"><a class="site-title" href="/">麦漆｜医療システムの技術的な検証</a><button id="change-detail" class="dads-button" data-type="text" data-size="sm" type="button" hidden>概要を表示</button></div></header>
+<nav class="container verification-nav" aria-label="検証作業"><a href="/" aria-current="page">構成・コードを調べる</a><a href="/workbench">検証を設定・実行する</a></nav>
 <main id="main" class="container system-journey" tabindex="-1">
   <div id="status" role="status" aria-live="polite"></div>
   <div id="alert" role="alert"></div>
-  <section id="audience-screen" aria-labelledby="audience-heading">
-    <p class="eyebrow">はじめに</p>
-    <h1 id="audience-heading">あなたの立場を選んでください</h1>
-    <p>GitHubからシステムの構成を読み取り、気になることを整理して、検証と改善につなげます。</p>
-    <div class="audience-options">
-      <button class="audience-card" type="button" data-audience="operator"><strong>非技術者</strong><span>仕組みを知り、不安や疑問を整理したい</span></button>
-      <button class="audience-card" type="button" data-audience="developer"><strong>技術者</strong><span>構成とコードを調べ、検証・改善したい</span></button>
-    </div>
-    <p class="note">説明の詳しさが変わります。途中で切り替えられます。</p>
-  </section>
-  <section id="repository-screen" aria-labelledby="repository-heading" hidden>
-    <p class="eyebrow">調べるシステム</p>
-    <h1 id="repository-heading">GitHubのリポジトリを読み込む</h1>
+  <section id="repository-screen" aria-labelledby="repository-heading">
+    <p class="eyebrow">開発者のための検証基盤</p>
+    <h1 id="repository-heading">医療システムの動作を検証する</h1>
+    <p>対象の構成とコードを調べ、正常時と障害時の動作を検証します。対象の版・実行条件・観測結果を対応づけて記録し、改修後の再検証と比較へ進めます。</p>
+    <ol class="system-progress" aria-label="検証の流れ"><li>構成とコードを調べる</li><li>条件と観測方法を決める</li><li>実行して結果を比較する</li></ol>
+    <h2>検証対象のリポジトリを読み込む</h2>
     <form id="repository-form" novalidate>
       <label class="system-label" for="repository-url">GitHubのリポジトリURL</label>
       <input id="repository-url" class="system-input" type="url" autocomplete="url" placeholder="https://github.com/所有者/リポジトリ" aria-describedby="repository-help repository-error" required>
@@ -36,16 +29,18 @@
       <button id="load-repository" class="dads-button" data-type="solid-fill" data-size="lg" type="submit">構成図を作成する</button>
     </form>
     <p id="ai-availability" role="status" hidden></p>
+    <p><a href="/workbench">構成図を作成せずに検証を設定する</a></p>
+    <section class="verification-history" aria-labelledby="verification-history-heading"><h2 id="verification-history-heading">記録済みの検証項目</h2><div id="verification-items"><p class="note">検証の記録を読み込んでいます。</p></div></section>
   </section>
   <section id="system-screen" aria-labelledby="system-heading" hidden>
     <div class="system-heading-row"><div><p class="eyebrow">読み込んだシステム</p><h1 id="system-heading"></h1><p id="repository-version" class="note"></p></div><button id="change-repository" class="dads-button" data-type="text" data-size="sm" type="button">別のリポジトリを読む</button></div>
-    <ol class="system-progress" aria-label="進め方"><li>構成を知る</li><li>疑問を整理する</li><li>検証・改善する</li></ol>
-    <section class="system-overview" aria-labelledby="overview-heading"><h2 id="overview-heading"></h2><p id="system-purpose"></p><h3>主な情報の流れ</h3><p id="system-workflow"></p><p class="note">AIが読み取った構成です。説明の正しさや実際の動作は、根拠と検証結果で確かめます。</p><p id="writing-update-note" class="note" hidden>以前の方針で作成した説明です。新しい文章規則と非技術者向けの概要を使うには、構成図を作り直してください。</p><button id="regenerate-diagram" class="dads-button" data-type="text" data-size="sm" type="button">構成図を作り直す</button></section>
+    <ol class="system-progress" aria-label="進め方"><li>構成とコードを調べる</li><li>検証条件を整理する</li><li>実行して結果を比較する</li></ol>
+    <section class="system-overview" aria-labelledby="overview-heading"><h2 id="overview-heading"></h2><p id="system-purpose"></p><h3>主な情報の流れ</h3><p id="system-workflow"></p><p class="note">AIが読み取った構成です。説明の正しさや実際の動作は、根拠と検証結果で確かめます。</p><p id="writing-update-note" class="note" hidden>以前の方針で作成した説明です。新しい文章規則と開発者向けの説明を使うには、構成図を作り直してください。</p><button id="regenerate-diagram" class="dads-button" data-type="text" data-size="sm" type="button">構成図を作り直す</button></section>
     <div class="system-workspace">
-      <section class="system-map-panel" aria-labelledby="map-heading"><h2 id="map-heading">システム構成図</h2><p>システムの役割と情報の流れを見渡し、気になる部分や接続線を選んでください。</p><p id="map-scope" class="note"></p><div class="diagram-controls" aria-label="図の表示"><button id="diagram-readable" type="button">文字を読める大きさ</button><button id="diagram-fit" type="button">全体を表示</button><button id="diagram-zoom-in" type="button">拡大</button><button id="diagram-zoom-out" type="button">縮小</button><output id="diagram-scale" aria-label="図の倍率">100%</output><button id="diagram-expand" type="button">図を大きく開く</button><span class="note">実線：記述に基づく関係　点線：推定・設定・起動の依存</span></div><p id="diagram-help" class="note">図は上から下へ読みます。見えていない部分は図の枠内をスクロールしてください。</p><div id="repository-diagram" class="repository-diagram" aria-busy="false" tabindex="0" aria-label="スクロールできるシステム構成図" aria-describedby="diagram-help"></div><p id="diagram-summary" class="note"></p><details class="map-basis"><summary>図の根拠と読み取れなかった範囲</summary><div id="map-basis"></div></details></section>
-      <aside class="concern-panel" aria-labelledby="selected-heading"><div class="component-explanation"><h2 id="selected-heading" tabindex="-1">システム全体について</h2><p id="selected-description">全体への不安や疑問も、そのまま書けます。</p><div id="selected-details"></div><div id="selected-evidence"></div><button id="select-whole" class="dads-button" data-type="text" data-size="sm" type="button" hidden>システム全体を選ぶ</button></div><form id="concern-form"><label class="system-label" for="concern-text">不安や疑問・AIへの返答</label><textarea id="concern-text" class="system-input" rows="4" placeholder="気になることを、自分の言葉で書いてください。" maxlength="2000" required></textarea><button id="ask-concern-ai" class="dads-button" data-type="solid-fill" data-size="md" type="button">AIと疑問を整理する</button><button id="save-concern" class="dads-button" data-type="text" data-size="sm" type="submit">この疑問を記録する</button></form><div id="concern-ai-answer" aria-live="polite"></div></aside>
+      <section class="system-map-panel" aria-labelledby="map-heading"><h2 id="map-heading">システム構成図</h2><p>処理・通信・保存先を確認し、調査する部分や接続線を選んでください。</p><p id="map-scope" class="note"></p><div class="diagram-controls" aria-label="図の表示"><button id="diagram-readable" type="button">文字を読める大きさ</button><button id="diagram-fit" type="button">全体を表示</button><button id="diagram-zoom-in" type="button">拡大</button><button id="diagram-zoom-out" type="button">縮小</button><output id="diagram-scale" aria-label="図の倍率">100%</output><button id="diagram-expand" type="button">図を大きく開く</button><span class="note">実線：記述に基づく関係　点線：推定・設定・起動の依存</span></div><p id="diagram-help" class="note">図は上から下へ読みます。見えていない部分は図の枠内をスクロールしてください。</p><div id="repository-diagram" class="repository-diagram" aria-busy="false" tabindex="0" aria-label="スクロールできるシステム構成図" aria-describedby="diagram-help"></div><p id="diagram-summary" class="note"></p><details class="map-basis"><summary>図の根拠と読み取れなかった範囲</summary><div id="map-basis"></div></details></section>
+      <aside class="concern-panel" aria-labelledby="selected-heading"><div class="component-explanation"><h2 id="selected-heading" tabindex="-1">システム全体について</h2><p id="selected-description">検証したい処理や障害条件を記入してください。</p><div id="selected-details"></div><div id="selected-evidence"></div><button id="select-whole" class="dads-button" data-type="text" data-size="sm" type="button" hidden>システム全体を選ぶ</button></div><form id="concern-form"><label class="system-label" for="concern-text">技術的な疑問・検証したい条件</label><textarea id="concern-text" class="system-input" rows="4" placeholder="例：保存直前にDBへの通信が切れた場合、応答と保存状態はどうなるか。" maxlength="2000" required></textarea><button id="ask-concern-ai" class="dads-button" data-type="solid-fill" data-size="md" type="button">コードと検証条件を調べる</button><button id="save-concern" class="dads-button" data-type="text" data-size="sm" type="submit">検証課題を記録する</button></form><div id="concern-ai-answer" aria-live="polite"></div></aside>
     </div>
-    <section class="saved-concerns" aria-labelledby="concerns-heading"><h2 id="concerns-heading">整理した疑問</h2><div id="concerns"></div></section>
+    <section class="saved-concerns" aria-labelledby="concerns-heading"><h2 id="concerns-heading">記録した検証課題</h2><div id="concerns"></div></section>
   </section>
 </main>
 <dialog id="diagram-dialog" class="diagram-dialog" aria-labelledby="diagram-dialog-title"><header><h2 id="diagram-dialog-title">構成図を大きく見る</h2><button id="diagram-close" class="dads-button" data-type="outline" data-size="sm" type="button">元の画面へ戻る</button></header><div id="diagram-dialog-body"></div></dialog>

@@ -5,6 +5,8 @@ use std::io::Write;
 mod dify;
 pub use dify::Config as DifyConfig;
 
+const VERIFICATION_SCOPE: &str = "医療システムを提供する開発者の技術的な検証。対象の版・コード・障害条件・観測方法・結果・未確認事項を対応づける。説明の詳しさは記録者の役割と独立し、利用者の試用・感想・合意を前提にしない。法令やガイドラインへの適合全体を保証しない。";
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Binding {
@@ -298,7 +300,7 @@ pub fn send(
         || message.question.len() > 6000
     {
         return Err(invalid(
-            "立場と、空でない2000文字・6000バイト以内の疑問を指定してください",
+            "説明の詳しさと、空でない2000文字・6000バイト以内の疑問を指定してください",
         ));
     }
     let graph = graph(store, &message.binding)?;
@@ -317,7 +319,7 @@ pub fn send(
     let mut inquiry = json!({"a_question":inquiry_result["result"],"z_graph":graph});
     crate::understanding::verify_refs(&mut inquiry, &snapshot);
     let (code, provided) = crate::ai::excerpts(&snapshot, &inquiry, 48 * 1024);
-    let context = json!({"repository":message.binding.repository,"commit":message.binding.commit,"model_revision":message.binding.revision,"selected_element":message.binding.object_id,"architecture":graph,"code_excerpts":code}).to_string();
+    let context = json!({"verification_scope":VERIFICATION_SCOPE,"repository":message.binding.repository,"commit":message.binding.commit,"model_revision":message.binding.revision,"selected_element":message.binding.object_id,"architecture":graph,"code_excerpts":code}).to_string();
     let context_digest = digest(context.as_bytes());
     if context.len() > 128 * 1024 {
         return Err(invalid("図とコードの文脈が128KiBを超えています"));
@@ -346,7 +348,7 @@ pub fn send(
         .rev()
         .map(|t| json!({"question":t.question,"answer":t.answer}))
         .collect();
-    let query = json!({"request_id":request_id,"audience":if message.audience=="developer" {"技術者"}else{"非技術者"},"message":message.question,"previous_record":thread.turns.last().map(|t| &t.record),"history":history,"results":results,"source_read":source_read,"writing_policy":crate::writing::policy(),"writing_policy_source":crate::writing::metadata()});
+    let query = json!({"request_id":request_id,"verification_scope":VERIFICATION_SCOPE,"audience":if message.audience=="developer" {"開発者（技術情報を含む説明）"}else{"開発者（概要を優先した説明）"},"message":message.question,"previous_record":thread.turns.last().map(|t| &t.record),"history":history,"results":results,"source_read":source_read,"writing_policy":crate::writing::policy(),"writing_policy_source":crate::writing::metadata()});
     let (answer, envelope, remote_id, backend) = if let Some(config) = dify {
         // Difyの初回system_contextを、追加読取後も使い続けない。
         // ローカルの履歴と整理案はqueryで引き継ぐ。

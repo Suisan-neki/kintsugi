@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, io, path::Path};
-const PROMPT_VERSION: &str = "gitdiagram-adapted-ja-v2-yomiyasu";
+const PROMPT_VERSION: &str = "gitdiagram-adapted-ja-v3-developer-verification";
 const PROMPT: &str = include_str!("system_diagram/prompt.txt");
 
 fn digest(bytes: &[u8]) -> String {

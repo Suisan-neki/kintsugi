@@ -869,7 +869,7 @@ fn statement_view(workspace: &Workspace, statement: &Statement) -> StatementView
     } else if !current_roles.is_empty() {
         (
             ConfirmationStatus::PartlyConfirmed,
-            "一方の担当だけが確認した。もう一方の確認は未記入".to_owned(),
+            "現在の条件の版で、記録者が内容を確認した".to_owned(),
         )
     } else if !statement.confirmations.is_empty() {
         (

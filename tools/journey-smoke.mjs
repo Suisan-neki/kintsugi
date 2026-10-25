@@ -1,4 +1,4 @@
-// 実Rust APIと保存済みの固定版を使い、立場→GitHub→図→疑問→検証設定を通す。
+// 実Rust APIと保存済みの固定版を使い、開発者の入口→GitHub→図→検証課題→検証設定を通す。
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -40,6 +40,10 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   page = await context.newPage(); page.setDefaultTimeout(10000);
   const errors = []; page.on('pageerror', e => errors.push(e.message));
+  await page.addInitScript(() => {
+    sessionStorage.setItem('eel-audience', 'operator');
+    if (!sessionStorage.getItem('eel-person')) sessionStorage.setItem('eel-person', JSON.stringify({ name: 'ブラウザ利用者（本人確認なし）', role: 'operator' }));
+  });
   await page.goto(url);
   let token = await page.locator('meta[name=review-token]').getAttribute('content');
   let headers = { 'X-Review-Token': token, 'Content-Type': 'application/json' };
@@ -47,11 +51,13 @@ try {
   const shot = name => page.screenshot({ path: join(output, 'system-' + name + '.png'), fullPage: true });
   const setReference = async value => { if (!await page.locator('.repository-options').evaluate(n => n.open)) await page.getByText('ブランチ・コミットを指定する', { exact: true }).click(); await page.locator('#repository-ref').fill(value); };
   await page.keyboard.press('Tab'); assert.equal(await page.evaluate(() => document.activeElement.textContent), '本文へ移動');
-  await page.getByRole('heading', { name: 'あなたの立場を選んでください' }).waitFor();
+  await page.getByRole('heading', { name: '医療システムの動作を検証する' }).waitFor();
+  assert.equal(await page.locator('[data-audience], a[href="/user-trial"]').count(), 0);
+  assert.equal(await page.getByRole('link', { name: '構成図を作成せずに検証を設定する', exact: true }).count(), 1);
+  await page.locator('#verification-items', { hasText: 'まだ検証項目はありません' }).waitFor();
   assert.equal(await page.getByText('まずデモで試す', { exact: true }).count(), 0);
   assert.equal(await page.getByText('モード設定の記入者', { exact: true }).count(), 0);
-  await shot('audience');
-  await page.getByRole('button', { name: /非技術者/ }).click();
+  await shot('developer-entry');
   await page.locator('#repository-url').fill('not-a-github-url');
   await page.getByRole('button', { name: '構成図を作成する', exact: true }).click();
   assert.equal(await page.locator('#repository-url').getAttribute('aria-invalid'), 'true');
@@ -79,7 +85,6 @@ try {
   await page.goto(url);
   token = await page.locator('meta[name=review-token]').getAttribute('content');
   headers = { 'X-Review-Token': token, 'Content-Type': 'application/json' };
-  await page.getByRole('button', { name: /非技術者/ }).click();
   const publicStatus = await (await context.request.get(url + '/api/v1/ai', { headers })).json();
   assert.equal(publicStatus.status, 'configured');
   assert.ok(!JSON.stringify(publicStatus).includes('synthetic-secret-key'));
@@ -98,6 +103,10 @@ try {
   const { result: graph, references } = await graphResponse.json();
   assert.equal(references.unverified.length, 0);
   assert.equal(graph.generation_attempts, 2); assert.equal(ai.state.calls, 2, '渡していない参照は修正を求め、検査後に表示する');
+  assert.match(await page.locator('#system-workflow').innerText(), /記録管理API/, '旧画面で非技術者を選んでいても技術情報を既定にする');
+  const recorder = await page.evaluate(() => sessionStorage.getItem('eel-person'));
+  assert.equal(JSON.parse(recorder).role, 'developer', '旧画面が立場から自動作成した匿名記録者は新しい既定へ移す');
+  await page.getByRole('button', { name: '概要を表示', exact: true }).click();
   assert.match(await page.locator('#system-purpose').innerText(), /利用者.*記録/);
   assert.doesNotMatch(await page.locator('#system-workflow').innerText(), /API|FastAPI|React|PostgreSQL/);
   assert.equal(graph.writing_policy.commit, '488dd37c0baa67ec65bf155aced9fa1a01d261e2');
@@ -125,7 +134,7 @@ try {
   await node.focus(); await page.keyboard.press('Enter');
   assert.equal(await node.getAttribute('aria-pressed'), 'true');
   await page.locator('#concern-text').fill('保存できないとき、利用者にどう伝わる？');
-  await page.getByRole('button', { name: 'AIと疑問を整理する', exact: true }).click();
+  await page.getByRole('button', { name: 'コードと検証条件を調べる', exact: true }).click();
   await page.locator('#concern-ai-answer', { hasText: 'AIからの返答' }).waitFor();
   assert.equal(ai.state.questions, 1); assert.equal((await view()).workspace.statements.length, 0, 'AI回答だけでは疑問や期待を保存しない');
   await page.locator('#concern-text').fill('保存できないとき、利用者にどう伝わる？');
@@ -135,12 +144,12 @@ try {
   await page.locator('#concern-text').fill('入口の疑問の下書き');
   await node.click(); assert.equal(await page.locator('#concern-text').inputValue(), '保存できないとき、利用者にどう伝わる？');
   await context.route('**/api/v1/change', route => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: '合成の更新競合' }) }));
-  await page.getByRole('button', { name: 'この疑問を記録する', exact: true }).click();
+  await page.getByRole('button', { name: '検証課題を記録する', exact: true }).click();
   await page.locator('#alert', { hasText: '合成の更新競合' }).waitFor();
   assert.equal((await view()).workspace.statements.length, 0);
   assert.equal(await page.locator('#concern-text').inputValue(), '保存できないとき、利用者にどう伝わる？');
   await context.unroute('**/api/v1/change');
-  await page.getByRole('button', { name: 'この疑問を記録する', exact: true }).click();
+  await page.getByRole('button', { name: '検証課題を記録する', exact: true }).click();
   await page.locator('[data-concern]').waitFor();
   const saved = (await view()).workspace;
   assert.equal(saved.statements.length, 1); assert.equal(saved.checks.length, 0);
@@ -167,8 +176,8 @@ try {
   const beforeAudience = JSON.stringify(withCheck.workspace);
   const positions = await page.locator('[data-node]').evaluateAll(ns => ns.map(n => [n.dataset.node, n.getAttribute('transform')]));
   await page.getByRole('button', { name: '拡大', exact: true }).click();
-  await page.getByRole('button', { name: /立場：非技術者/ }).click();
-  await page.getByRole('button', { name: /^技術者/ }).click();
+  await page.getByRole('button', { name: '技術情報を表示', exact: true }).click();
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('eel-person')), recorder, '詳しさを変えても記録者の名前と役割を変えない');
   await page.locator('#repository-diagram[aria-busy="false"]').waitFor();
   assert.match(await node.getAttribute('aria-label'), /PostgreSQL/);
   assert.equal(await page.locator('#repository-diagram svg').getAttribute('data-zoom'), '1.3', '立場変更で倍率を変えない');
@@ -184,7 +193,7 @@ try {
   await page.locator('#trial:not([hidden])').waitFor();
   assert.match(await page.locator('#current-check').innerText(), /保存できなかったとき/);
   assert.equal((await view()).workspace.evidence.length, 0);
-  await page.getByRole('link', { name: '構成図と疑問に戻る', exact: true }).click();
+  await page.getByRole('link', { name: '構成図と検証項目に戻る', exact: true }).click();
   await page.locator('[data-concern]').waitFor();
   await page.locator('#repository-diagram[aria-busy="false"]').waitFor();
   assert.equal(await node.getAttribute('aria-pressed'), 'true', '検証から元の構成要素へ戻る');
@@ -195,7 +204,7 @@ try {
   await page.locator('#repository-diagram[aria-busy="false"] [data-edge]').first().waitFor();
   await page.locator(`[data-edge="${dataEdge.id}"]`).focus(); await page.keyboard.press('Enter');
   assert.equal(await page.locator('#concern-text').inputValue(), '通信が途切れたときの疑問');
-  await page.getByRole('button', { name: 'この疑問を記録する', exact: true }).click();
+  await page.getByRole('button', { name: '検証課題を記録する', exact: true }).click();
   await page.locator('[data-concern]').nth(1).waitFor();
   const relationQuestion = (await view()).workspace.statements.find(s => s.text === '通信が途切れたときの疑問');
   assert.equal(JSON.parse(relationQuestion.origin).object_type, 'relation');
@@ -247,8 +256,37 @@ try {
   assert.ok(await page.locator('#repository-diagram').evaluate(n => { const s=n.querySelector('svg').getBoundingClientRect(); return s.width <= n.clientWidth && s.height <= n.clientHeight; }));
   await page.getByRole('button', { name: '文字を読める大きさ', exact: true }).click();
   assert.equal((await context.request.post(url + '/api/v1/understand', { headers: { 'Content-Type': 'application/json' }, data: { operation: 'architecture', repository: snapshot.fullName, commit: snapshot.commit } })).status(), 403);
+  ai.state.mode = 'unavailable';
+  const callsBeforeHistory = ai.state.calls;
+  await page.goto(url);
+  const history = page.locator(`[data-check-summary="${withCheck.workspace.checks[0].id}"]`);
+  await history.waitFor();
+  assert.match(await history.innerText(), /未実行/);
+  assert.equal(new URL(await history.getByRole('link', { name: '検証の設定を開く' }).getAttribute('href'), url).searchParams.get('ref'), snapshot.commit);
+  await shot('verification-history');
+  await history.getByRole('link', { name: '検証の設定を開く', exact: true }).click();
+  await page.locator('#trial:not([hidden])').waitFor();
+  assert.match(await page.locator('#current-check').innerText(), /保存できなかったとき/);
+  assert.equal(ai.state.calls, callsBeforeHistory, '記録済みの検証はAIが利用できなくても直接開ける');
+  const explicitRecorder = { name: '合成の既存担当', role: 'operator' };
+  await page.evaluate(p => sessionStorage.setItem('eel-person', JSON.stringify(p)), explicitRecorder);
+  await page.goto(`${url}/?url=${encodeURIComponent('https://github.com/' + snapshot.fullName)}&ref=${snapshot.commit}`);
+  await page.locator('#system-screen:not([hidden])').waitFor();
+  await page.locator('#change-detail').click();
+  assert.deepEqual(JSON.parse(await page.evaluate(() => sessionStorage.getItem('eel-person'))), explicitRecorder, '人が記入した名前と役割は移行や説明切り替えで変更しない');
+  for (const action of [
+    { op: 'add_statement', statement: { id: 'malformed-origin-statement', kind: 'unanswered', role: 'developer', text: '合成の出所が不正な記録', origin: JSON.stringify({ kind: 'repository_concern', repository: 123, commit: 99 }), source: null, check_ids: [] } },
+    { op: 'add_check', check: { id: 'malformed-origin-check', version: 1, text: '合成の未設定の対象', origin: 'repository-concern:malformed-origin-statement', source: null, observation: null, rule: 'manual_only', dependencies: [], questions: [] } },
+  ]) {
+    const current = await view();
+    assert.equal((await context.request.post(url + '/api/v1/change', { headers, data: { expected_revision: current.workspace.revision, actor: '合成の開発者', reason: '自由記述の出所をコード参照として信用しないことを確認', action } })).status(), 200);
+  }
+  await page.goto(url);
+  const unbound = page.locator('[data-check-summary="malformed-origin-check"]'); await unbound.waitFor();
+  assert.match(await unbound.innerText(), /対象コードは未設定/);
+  assert.equal(new URL(await unbound.getByRole('link').getAttribute('href'), url).searchParams.get('ref'), null);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ checks: ['audience first', 'source-grounded synthetic architecture', 'data and startup relations distinguished', 'all references verified', 'keyboard node and edge selection', 'per-object drafts', 'conflict preserves question', 'question is not expectation or test', 'fixed source', 'verification setup and return', 'audience switch preserves layout and records', 'technical internal details', 'relation-linked concern', 'zoom and fit', 'repository separation', 'reload', '1440/390/320px and text 200%', 'token required', 'operator CLI setup and connection test', 'no end-user credentials UI or configuration API', 'server settings load only at startup', 'native AI without Node.js', 'invalid output repair', 'cached diagram and historical revision', 'failed regeneration preserves diagram', 'AI concern without automatic saving', 'whole diagram fits viewport'], human_evaluation: 'not_conducted' }));
+  console.log(JSON.stringify({ checks: ['developer entry without role selection', 'source-grounded synthetic architecture', 'data and startup relations distinguished', 'all references verified', 'keyboard node and edge selection', 'per-object drafts', 'conflict preserves question', 'question is not expectation or test', 'fixed source', 'verification setup and return', 'explanation switch preserves recorder, layout and records', 'technical internal details', 'relation-linked concern', 'zoom and fit', 'repository separation', 'reload', '1440/390/320px and text 200%', 'token required', 'operator CLI setup and connection test', 'no end-user credentials UI or configuration API', 'server settings load only at startup', 'native AI without Node.js', 'invalid output repair', 'cached diagram and historical revision', 'failed regeneration preserves diagram', 'AI concern without automatic saving', 'whole diagram fits viewport'], human_evaluation: 'not_conducted' }));
 } catch (e) {
   if (page && !page.isClosed()) { console.error(await page.locator('body').innerText()); await page.screenshot({ path: join(output, 'system-failure.png'), fullPage: true }); }
   throw e;
