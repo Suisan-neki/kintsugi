@@ -237,7 +237,8 @@ try {
   await runTrial();
   let result = await page.locator('#result-body').innerText();
   assert.match(result, /現在の判定[\s\S]*条件を満たす/);
-  assert.match(result, /麦漆が保存先を直接読み出した結果/);
+  // 結果の取得元は保存済みのサーバー記録を表示する。画面のラベルとは区別する。
+  assert.match(result, /基盤が保存先を直接読み出した結果/);
   assert.match(result, /別のプロセスで対象の読み出し機能を動かした結果/);
   log('通常時: 保存先の直接読み出しと別プロセスの読み出しで「条件を満たす」');
   await shot('result-normal');
