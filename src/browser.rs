@@ -1,4 +1,5 @@
 //! 宣言した手順だけを試験用Chromiumで操作する。ログイン準備と試験操作を分ける。
+use crate::error::invalid;
 use crate::{
     container::{ContainerSpec, Session as Containers},
     recording::write_json_new,
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -177,9 +178,7 @@ pub struct DatabaseRead {
     pub text: String,
     pub detail: String,
 }
-fn invalid(s: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, s.into())
-}
+
 fn id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
@@ -379,7 +378,7 @@ fn unavailable(run_id: &str, detail: &str) -> BrowserReport {
     }
 }
 pub struct Session {
-    child: Child,
+    child: crate::process::ChildGuard,
     directory: PathBuf,
     deadline: Instant,
     report: BrowserReport,
@@ -478,14 +477,13 @@ impl Session {
                 })?,
             );
         }
-        let child = cmd
-            .arg(directory.join("runner.mjs"))
+        cmd.arg(directory.join("runner.mjs"))
             .arg(directory.join("request.json"))
             .current_dir(&directory)
             .stdin(Stdio::null())
             .stdout(fs::File::create(directory.join("stdout.txt"))?)
-            .stderr(fs::File::create(directory.join("stderr.txt"))?)
-            .spawn()?;
+            .stderr(fs::File::create(directory.join("stderr.txt"))?);
+        let child = crate::process::ChildGuard::spawn(&mut cmd)?;
         let mut session = Self {
             child,
             directory,
@@ -550,13 +548,13 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = fs::write(self.directory.join("stop"), b"stop");
-        for _ in 0..20 {
+        for _ in 0..80 {
             if self.child.try_wait().ok().flatten().is_some() {
                 return;
             }
             thread::sleep(Duration::from_millis(25));
         }
-        let _ = self.child.kill();
+        let _ = crate::process::kill_group(&mut self.child);
         let _ = self.child.wait();
     }
 }

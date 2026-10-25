@@ -1,5 +1,6 @@
 //! 固定したGitのコードをコピーし、明示されたローカル試験を実行する。
 //! 計測対象は構造化された自己申告の観測。OSの隔離や実行経路の証明ではない。
+use crate::error::invalid;
 use crate::{
     model::*,
     python_env::{ImportRoot, Launch, Program},
@@ -161,16 +162,8 @@ pub struct ExecutionTrace {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub containers: Option<crate::container::ContainerPhase>,
 }
-struct ChildGuard(std::process::Child);
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-fn invalid(text: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text.into())
-}
+use crate::process::ChildGuard;
+
 fn relative(value: &str) -> io::Result<()> {
     if value.is_empty()
         || value.len() > 1024
@@ -1220,7 +1213,7 @@ pub fn execute_with_dependencies(
             let stderr = File::create(directory.join("stderr.txt"))?;
             let mut command = launch.command(operate, &args)?;
             command.stdout(stdout).stderr(stderr);
-            let child = ChildGuard(command.spawn()?);
+            let child = ChildGuard::spawn(&mut command)?;
             recorder.record(
                 Source::Process,
                 EventKind::ProcessStarted,
@@ -1330,7 +1323,7 @@ pub fn execute_with_dependencies(
             command
                 .stdout(File::create(directory.join("readback-stdout.txt"))?)
                 .stderr(File::create(directory.join("readback-stderr.txt"))?);
-            let child = ChildGuard(command.spawn()?);
+            let child = ChildGuard::spawn(&mut command)?;
             recorder.record(
                 Source::Process,
                 EventKind::ProcessStarted,
@@ -1506,7 +1499,7 @@ fn wait(
             .any(|p| fs::metadata(directory.join(p)).is_ok_and(|m| m.len() > MAX_TRACE));
         if started.elapsed() >= Duration::from_millis(timeout_ms) || output_limit {
             timed_out = !output_limit;
-            child.0.kill()?;
+            crate::process::kill_group(&mut child.0)?;
             break child.0.wait()?;
         }
         thread::sleep(Duration::from_millis(5));
@@ -1772,7 +1765,7 @@ fn start_server(
     }
     let mut command = launch.command(&start, args)?;
     command.stdout(stdout).stderr(stderr);
-    let mut child = ChildGuard(command.spawn()?);
+    let mut child = ChildGuard::spawn(&mut command)?;
     phase.started = true;
     recorder.record(
         Source::Process,

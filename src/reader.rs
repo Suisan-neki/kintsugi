@@ -1,4 +1,5 @@
 //! 公開GitHubの読取・解析API。対象コードもNode.jsも起動しない。
+use crate::error::invalid;
 // 固定パターンは初回だけコンパイルし、JSと同じASCIIの識別子・語境界を使う。
 macro_rules! rx {
     ($pattern:literal) => {{
@@ -19,9 +20,7 @@ mod overview;
 mod plan;
 mod repository_map;
 mod snapshot;
-fn invalid(message: impl Into<String>) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidInput, message.into())
-}
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{fs, io};

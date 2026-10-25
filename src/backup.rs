@@ -1,4 +1,5 @@
 //! 事例の全版を持ち出し、既存を置き換えずに復元する。試行の作業領域は含めない。
+use crate::error::invalid;
 use crate::{
     recording::write_json_new,
     workspace::{self, Workspace},
@@ -13,9 +14,7 @@ pub struct Backup {
     pub case_id: String,
     pub revisions: Vec<Workspace>,
 }
-fn invalid(text: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text)
-}
+
 fn same(a: &(impl Serialize + ?Sized), b: &(impl Serialize + ?Sized)) -> io::Result<bool> {
     Ok(serde_json::to_value(a).map_err(io::Error::other)?
         == serde_json::to_value(b).map_err(io::Error::other)?)
@@ -268,14 +267,14 @@ pub fn snapshot(directory: &Path) -> io::Result<Backup> {
     let mut bytes = 0;
     // 最新版より後の並行更新は含めず、開始時に読んだ固定版までを保存する。
     for version in 1..=latest.revision {
-        let path = directory
-            .join("revisions")
-            .join(format!("{version:020}.json"));
-        bytes += fs::metadata(&path)?.len();
+        let workspace = workspace::load_revision(directory, version)?;
+        bytes += serde_json::to_vec(&workspace)
+            .map_err(io::Error::other)?
+            .len() as u64;
         if bytes > MAX_BACKUP {
             return Err(invalid("バックアップが32MiBを超えています"));
         }
-        revisions.push(crate::recording::read_json(&path)?);
+        revisions.push(workspace);
     }
     let result = Backup {
         schema_version: 1,
@@ -303,10 +302,10 @@ pub fn restore(directory: &Path, backup: &Backup) -> io::Result<workspace::Works
         &directory.join("restore.pending"),
         &serde_json::json!({"schema_version":1,"case_id":backup.case_id}),
     )?;
-    fs::create_dir(directory.join("revisions"))?;
     for w in &backup.revisions {
         workspace::save_revision(directory, w)?;
     }
     fs::remove_file(directory.join("restore.pending"))?;
+    fs::File::open(directory)?.sync_all()?;
     Ok(workspace::view(workspace::load(directory)?))
 }

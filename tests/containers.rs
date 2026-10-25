@@ -168,6 +168,7 @@ fn tag_without_digest_is_rejected() {
 }
 
 #[test]
+#[ignore = "Dockerと固定イメージを使うため、手動・週次の統合試験で実行"]
 fn nginx_http_is_satisfied() {
     if !docker_available() {
         return;
@@ -231,6 +232,7 @@ fn nginx_http_is_satisfied() {
 }
 
 #[test]
+#[ignore = "Dockerと固定イメージを使うため、手動・週次の統合試験で実行"]
 fn stopping_the_database_container_is_effective() {
     if !docker_available() {
         return;
@@ -291,6 +293,7 @@ fn stopping_the_database_container_is_effective() {
 }
 
 #[test]
+#[ignore = "Dockerと固定イメージを使うため、手動・週次の統合試験で実行"]
 fn disconnecting_the_database_is_effective() {
     if !docker_available() {
         return;

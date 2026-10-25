@@ -16,11 +16,18 @@
     "test:dialogue": "node tools/dialogue-smoke.mjs",
     "test:user-trial": "node tools/user-trial-smoke.mjs",
     "test:ui": "npm run test:journey && npm run test:dialogue && npm run test:user-trial",
-    "test:trial-plan": "node --test tools/openemr-trial-plan-tests.mjs"
+    "test:trial-plan": "node --test tools/openemr-trial-plan-tests.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint ui",
+    "test:api": "node --test tools/api-tests.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "elkjs": "0.12.0",
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
     "playwright": "1.62.1",
-    "pngjs": "7.0.0"
+    "pngjs": "7.0.0",
+    "typescript": "5.9.3"
   }
 }

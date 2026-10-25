@@ -1,7 +1,8 @@
 //! 固定コミットの読取記録を基盤側に保存し、概要・質問・試験準備の結果を返す。
 //! 結果が示すコード参照は、保存した読取記録のファイルと行に照合する。照合は説明の正しさを保証しない。
+use crate::error::invalid;
 use crate::reader::{self, ReaderRequest};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs, io,
@@ -9,9 +10,19 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum UnderstandRequest {
+    Read {
+        url: String,
+        reference: String,
+    },
+    Analyze {
+        repository: String,
+        commit: String,
+        path: Option<String>,
+        line: Option<u32>,
+    },
     /// GitHubのURLと任意のブランチ・タグ・コミットから読み、コミットを固定する。
     Open {
         url: String,
@@ -54,10 +65,49 @@ pub struct Store {
     base: PathBuf,
     lock: Arc<Mutex<()>>,
     diagram_lock: Arc<Mutex<()>>,
+    cache: Arc<Mutex<std::collections::HashMap<String, Cached>>>,
 }
 
-fn invalid(text: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text.into())
+#[derive(Clone, PartialEq, Eq)]
+struct Stamp {
+    modified: std::time::SystemTime,
+    length: u64,
+}
+struct Cached {
+    stamp: Stamp,
+    result: Value,
+}
+fn stamp(path: &std::path::Path) -> io::Result<Stamp> {
+    let m = fs::metadata(path)?;
+    Ok(Stamp {
+        modified: m.modified()?,
+        length: m.len(),
+    })
+}
+impl UnderstandRequest {
+    fn source(&self) -> Option<(String, String)> {
+        match self {
+            Self::Read { .. } => None,
+            Self::Open { url, reference } => is_commit(reference)
+                .then(|| repository_of(url).map(|r| (r, reference.clone())))
+                .flatten(),
+            Self::Analyze {
+                repository, commit, ..
+            }
+            | Self::Overview { repository, commit }
+            | Self::Architecture { repository, commit }
+            | Self::Inquire {
+                repository, commit, ..
+            }
+            | Self::Function {
+                repository, commit, ..
+            }
+            | Self::File {
+                repository, commit, ..
+            }
+            | Self::Plan { repository, commit } => Some((repository.clone(), commit.clone())),
+        }
+    }
 }
 
 fn validate(repository: &str, commit: &str) -> io::Result<()> {
@@ -97,6 +147,7 @@ impl Store {
             base: fs::canonicalize(base)?,
             lock: Arc::new(Mutex::new(())),
             diagram_lock: Arc::new(Mutex::new(())),
+            cache: Default::default(),
         })
     }
     fn path(&self, repository: &str, commit: &str) -> io::Result<PathBuf> {
@@ -155,15 +206,82 @@ impl Store {
             fs::create_dir_all(parent)?;
         }
         let temporary = path.with_extension(format!("{}.pending", std::process::id()));
-        fs::write(
-            &temporary,
-            serde_json::to_vec(&merged).map_err(io::Error::other)?,
-        )?;
+        let bytes = serde_json::to_vec(&merged).map_err(io::Error::other)?;
+        if fs::read(&path).is_ok_and(|previous| previous == bytes) {
+            return Ok(());
+        }
+        fs::write(&temporary, bytes)?;
         fs::rename(&temporary, &path)
     }
 
     pub fn handle(&self, request: UnderstandRequest) -> io::Result<Value> {
+        let source = request
+            .source()
+            .map(|(repository, commit)| self.path(&repository, &commit))
+            .transpose()?;
+        let key = serde_json::to_string(&request).map_err(io::Error::other)?;
+        if let Some(path) = &source
+            && let Ok(current) = stamp(path)
+            && let Some(cached) = self
+                .cache
+                .lock()
+                .map_err(|_| io::Error::other("解析の保存状態を読めません"))?
+                .get(&key)
+            && cached.stamp == current
+        {
+            return Ok(cached.result.clone());
+        }
+        let result = self.handle_uncached(request)?;
+        if let Some(path) = source
+            && let Ok(current) = stamp(&path)
+        {
+            let mut cache = self
+                .cache
+                .lock()
+                .map_err(|_| io::Error::other("解析の保存状態を読めません"))?;
+            if cache.len() >= 16 {
+                cache.clear();
+            }
+            cache.insert(
+                key,
+                Cached {
+                    stamp: current,
+                    result: result.clone(),
+                },
+            );
+        }
+        Ok(result)
+    }
+    fn handle_uncached(&self, request: UnderstandRequest) -> io::Result<Value> {
         let (snapshot, output) = match request {
+            UnderstandRequest::Read { url, reference } => {
+                let output = reader::read(ReaderRequest::Read { url, reference })?;
+                self.save(&output["snapshot"])?;
+                return Ok(
+                    json!({"schema_version":1,"source":source_summary(&output["snapshot"]),"input_provenance":"server_read"}),
+                );
+            }
+            UnderstandRequest::Analyze {
+                repository,
+                commit,
+                path,
+                line,
+            } => {
+                let snapshot = self.load(&repository, &commit)?;
+                let mut output = reader::read(ReaderRequest::Analyze {
+                    snapshot,
+                    path,
+                    line,
+                })?;
+                self.save(&output["snapshot"])?;
+                output["source"] = source_summary(&output["snapshot"]);
+                output
+                    .as_object_mut()
+                    .ok_or_else(|| invalid("解析結果の形式が不正です"))?
+                    .remove("snapshot");
+                output["input_provenance"] = json!("server_stored");
+                return Ok(output);
+            }
             UnderstandRequest::Open { url, reference } => {
                 // 40桁のコミットを指定し、同じコミットを読んだ記録があれば、GitHubへ問い合わせずに使う。
                 let stored = repository_of(&url).and_then(|repository| {

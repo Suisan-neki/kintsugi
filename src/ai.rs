@@ -97,16 +97,27 @@ pub fn status(config: Option<&Config>) -> Value {
 }
 
 /// 質問に関係する行の前後を、行番号付きで抜き出す。
+#[derive(serde::Deserialize)]
+struct VerifiedReference {
+    path: String,
+    line: u64,
+    end_line: Option<u64>,
+    verified: bool,
+}
 fn verified_ranges(v: &Value, out: &mut Vec<(String, u64, u64)>) {
     match v {
         Value::Object(map) => {
             if let Some(Value::Array(refs)) = map.get("refs") {
                 for r in refs {
-                    if r["verified"] == true
-                        && let (Some(p), Some(l)) = (r["path"].as_str(), r["line"].as_u64())
+                    if let Ok(reference) = serde_json::from_value::<VerifiedReference>(r.clone())
+                        && reference.verified
                     {
-                        let end = r["end_line"].as_u64().unwrap_or(l);
-                        out.push((p.to_owned(), l, end.min(l + 80)));
+                        let end = reference.end_line.unwrap_or(reference.line);
+                        out.push((
+                            reference.path,
+                            reference.line,
+                            end.min(reference.line.saturating_add(80)),
+                        ));
                     }
                 }
             }

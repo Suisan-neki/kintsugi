@@ -2,6 +2,7 @@
 //! 依存先は公開GitHubの固定コミットから、読み込み先のディレクトリだけを取り出して使う。
 //! インストール用のスクリプト・ビルド処理は実行しない。パッケージ情報（dist-info）は、
 //! pyproject.toml に静的に書かれた名前・版・コマンド・entry points だけから基盤が作る。
+use crate::error::invalid;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -106,10 +107,6 @@ pub struct PythonTrace {
     pub import_path: Vec<String>,
     pub packages: Vec<PackageRecord>,
     pub launches: Vec<ResolvedLaunch>,
-}
-
-fn invalid(text: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text.into())
 }
 
 pub fn validate(

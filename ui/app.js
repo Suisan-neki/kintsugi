@@ -1,6 +1,6 @@
+import { apiRequest } from "./api.js";
 import { mountDiagram, objectTitle, selectDiagramObject, resizeDiagram, zoomDiagram } from '/ui/repository-diagram.js';
 const $ = id => document.getElementById(id);
-const token = document.querySelector('meta[name="review-token"]').content;
 const state = { audience: null, source: null, overview: null, graph: null, selected: null, view: null, sequence: 0, loading: false, saving: false, draftKey: null, preparation: null, dialogue: null, dialogueSequence: 0 };
 const AUDIENCE = { operator: '非技術者', developer: '技術者' };
 function el(tag, attrs = {}, ...children) {
@@ -18,12 +18,7 @@ function remembered(key) { try { return sessionStorage.getItem(key); } catch { r
 function remember(key, value) { try { sessionStorage.setItem(key, value); } catch { /* 保存できなくても現在の画面は使う。 */ } }
 function status(text) { $('status').textContent = text; }
 function error(e) { $('alert').replaceChildren(el('p', { className: 'input-error' }, e.message)); }
-async function api(path, body) {
-  const r = await fetch('/api/v1/' + path, { method: body ? 'POST' : 'GET', headers: { 'X-Review-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
-  const data = await r.json();
-  if (!r.ok) throw Error(data.error || `HTTP ${r.status}`);
-  return data;
-}
+const api = (path, body) => apiRequest(body ? 'POST' : 'GET', '/api/v1/' + path, body);
 async function run(task, current = () => true) { $('alert').replaceChildren(); try { return await task(); } catch (e) { if (current()) error(e); return null; } }
 function screen(name) {
   for (const id of ['audience', 'repository', 'system']) $(id + '-screen').hidden = id !== name;

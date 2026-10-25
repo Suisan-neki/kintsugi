@@ -1,4 +1,5 @@
 //! 準備済みの静的ファイルを、ハッシュで照合して試験用Webサーバーへ渡す。
+use crate::error::invalid;
 use crate::{environment, recording::*, workspace::CodeReference};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -42,9 +43,7 @@ impl Drop for Snapshot {
         let _ = fs::remove_dir_all(&self.directory);
     }
 }
-fn invalid(s: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, s)
-}
+
 fn hash(s: &str) -> bool {
     s.len() == 64
         && s.bytes()

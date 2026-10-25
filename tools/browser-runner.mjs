@@ -5,9 +5,13 @@ import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 const request=JSON.parse(await fs.readFile(process.argv[2],'utf8'));
 const dir=path.dirname(process.argv[2]), spec=request.spec;
-const report={schema_version:1,run_id:request.run_id,version:'',prepared:false,completed:false,steps:[],responses:[],blocked_requests:0,response_limit:false,detail:'',launch_args:['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']};
-if(process.env.EEL_BROWSER_EXTRA_ARGS){const args=JSON.parse(process.env.EEL_BROWSER_EXTRA_ARGS);if(!Array.isArray(args)||args.length>16||args.some(s=>typeof s!=='string'||s.includes('\0')))throw Error('ブラウザーの追加引数が不正');report.launch_args.push(...args);}
+const report={schema_version:1,run_id:request.run_id,version:'',prepared:false,completed:false,steps:[],responses:[],blocked_requests:0,response_limit:false,detail:'',launch_args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']};
+if(process.env.EEL_BROWSER_EXTRA_ARGS){const args=JSON.parse(process.env.EEL_BROWSER_EXTRA_ARGS);if(!Array.isArray(args)||args.length>16||args.some(s=>typeof s!=='string'||s.includes('\0')||['--no-sandbox','--disable-setuid-sandbox','--disable-web-security'].includes(s.split('=')[0])))throw Error('ブラウザーの追加引数が不正');report.launch_args.push(...args);}
 let browser, page, secrets={}, masks=[], requests=new Map(), active=null, pending=new Set(), deadline=Date.now()+request.timeout_ms;
+// 停止要求は操作待ちの間にもブラウザを閉じ、Playwrightが起動した子を回収する。
+const closeBrowser=async()=>{if(browser)await browser.close().catch(()=>{});};
+process.once('SIGTERM',()=>{void closeBrowser();});
+const stopPoll=setInterval(()=>{void fs.stat(path.join(dir,'stop')).then(closeBrowser,()=>{});},50);stopPoll.unref();
 const redact=text=>{let s=String(text);for(const value of Object.values(secrets).filter(v=>typeof v==='string'&&v.length)){s=s.split(value).join('[秘匿]');}return s.slice(0,8192);};
 const replace=s=>s.replaceAll('{{test_value}}',request.test_value);
 const save=async(name,data)=>{const temp=path.join(dir,name+'.tmp');await fs.writeFile(temp,JSON.stringify(data),{mode:0o600,flag:'wx'});await fs.rename(temp,path.join(dir,name));};
@@ -92,7 +96,7 @@ async function steps(list,phase){
 try{
  if(process.env.EEL_BROWSER_SECRETS_FILE)secrets=JSON.parse(await fs.readFile(process.env.EEL_BROWSER_SECRETS_FILE,'utf8'));
  const {chromium}=await import(pathToFileURL(process.env.EEL_PLAYWRIGHT_MODULE).href);
- browser=await chromium.launch({headless:true,executablePath:process.env.EEL_BROWSER_EXECUTABLE||undefined,args:report.launch_args});report.version=browser.version();
+ browser=await chromium.launch({headless:true,chromiumSandbox:true,executablePath:process.env.EEL_BROWSER_EXECUTABLE||undefined,args:report.launch_args});report.version=browser.version();
  if(report.version!==spec.expected_version)throw Error('ブラウザの版が試験設定と異なる');
  const context=await browser.newContext({viewport:{width:1440,height:1000},ignoreHTTPSErrors:spec.tls,serviceWorkers:'block',acceptDownloads:false});
  await context.route('**/*',async route=>{let allowed=false;try{allowed=request.origins.includes(new URL(route.request().url()).origin);}catch{}if(allowed)await route.continue();else{report.blocked_requests++;await route.abort('blockedbyclient');}});
@@ -111,7 +115,7 @@ try{
   await Promise.all([...pending]);report.responses=[];requests.clear();report.completed=await steps(spec.actions,'action');
  }
  await Promise.race([Promise.all([...pending]),new Promise(r=>setTimeout(r,Math.min(2000,Math.max(1,deadline-Date.now()))))]);
-}catch(error){report.detail=redact(error.message);}finally{if(browser)await browser.close().catch(()=>{});if(!report.detail)report.detail=report.completed?'宣言した操作を完了した。画面・HTTP・DBの記録を別々に確認する':'操作を完了していない';
+}catch(error){report.detail=redact(error.message);}finally{clearInterval(stopPoll);await closeBrowser();if(!report.detail)report.detail=report.completed?'宣言した操作を完了した。画面・HTTP・DBの記録を別々に確認する':'操作を完了していない';
  if(!await fs.stat(path.join(dir,'ready.json')).then(()=>true,()=>false))await save('ready.json',report);
  await save('result.json',report);
 }

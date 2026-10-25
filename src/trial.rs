@@ -1,5 +1,6 @@
 //! 試験案の判定条件・故障・状態の読み出し。
 //! 対象プログラムの報告（終了コード・出力）と、基盤が保存先を読み出した結果を分けて記録する。
+use crate::error::invalid;
 use crate::model::{Assessment, Manifest, Verdict};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -180,10 +181,6 @@ pub struct TrialOutcome {
     pub server: Option<crate::server::ServerPhase>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub containers: Option<crate::container::ContainerPhase>,
-}
-
-fn invalid(text: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text.into())
 }
 
 pub fn validate(

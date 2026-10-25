@@ -1,62 +1,106 @@
 name: Rust checks
 on:
   pull_request:
+    paths: &code_paths
+      - 'src/**'
+      - 'ui/**'
+      - 'adapters/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'examples/**'
+      - 'third_party/**'
+      - 'Cargo.*'
+      - 'build.rs'
+      - 'rust-toolchain.toml'
+      - 'package*.json'
+      - 'tsconfig*.json'
+      - 'eslint.config.*'
+      - '.github/**'
   push:
     branches: [main]
+    paths: *code_paths
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
+env:
+  MUGIURUSHI_SOURCE_REVISION: ${{ github.sha }}
 jobs:
-  rust:
+  format:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt
       - run: cargo fmt --check
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock') }}-
+      - run: rustup toolchain install 1.99.0 --profile minimal --component clippy
       - run: cargo check --locked
       - run: cargo test --locked
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo build --locked
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-binary
+          path: target/debug/mugiurushi
+          retention-days: 1
+  e2e:
+    if: github.event_name != 'push'
+    needs: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: test-binary
+          path: target/debug
+      - run: chmod +x target/debug/mugiurushi
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.19.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:api
       - name: Verify the pinned yomiyasu rules and upstream checker
         run: python3 tools/check-yomiyasu.py
-      - name: Check version-bound OpenEMR trial plan requests
-        run: node --test tools/openemr-trial-plan-tests.mjs
+      - run: node --test tools/openemr-trial-plan-tests.mjs
+      - run: python3 tools/environment-runner-tests.py
+      - run: python3 tools/openemr-trial-tests.py
       - run: node tools/queue-demo.mjs evaluations/ci-queue
       - run: node tools/pinned-demo.mjs evaluations/ci-external
-      - run: node tools/backend-demo.mjs evaluations/ci-backend --live
+      - run: node tools/backend-demo.mjs evaluations/ci-backend
       - run: npm run test:reader-native
-      - run: npm ci --ignore-scripts
-      - run: npx playwright install --with-deps chromium
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        id: playwright
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install-deps chromium
+      - if: steps.playwright.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
       - run: npm run test:journey
       - run: npm run test:dialogue
       - run: npm run test:browser-handoff
       - run: npm run test:user-trial
-      - name: Operate the app against the public repository sjl/t
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          umask 077
-          printf '%s' "$GH_TOKEN" > "$RUNNER_TEMP/github-token"
-          EEL_GITHUB_TOKEN_FILE="$RUNNER_TEMP/github-token" npm run test:reader-native -- --live
-          EEL_GITHUB_TOKEN_FILE="$RUNNER_TEMP/github-token" npm run test:app
-      - name: Send and store a DICOM image with pinned pynetdicom and pydicom
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          umask 077
-          printf '%s' "$GH_TOKEN" > "$RUNNER_TEMP/github-token"
-          EEL_GITHUB_TOKEN_FILE="$RUNNER_TEMP/github-token" npm run test:dicom
       - run: npm run test:browser
-      - run: cargo test --locked --test containers browser_observes_nginx -- --ignored --nocapture
-      - name: Register a synthetic OpenEMR patient and visit, then repeat with the database stopped
-        run: |
-          umask 077
-          printf '%s' '{"username":"eel-operator","password":"eel-pass-trial"}' > "$RUNNER_TEMP/openemr-secrets.json"
-          EEL_BROWSER_SECRETS_FILE="$RUNNER_TEMP/openemr-secrets.json" cargo test --locked --test containers openemr_browser -- --ignored --nocapture
       - name: Keep synthetic review screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -64,14 +108,6 @@ jobs:
           name: synthetic-review-screenshots
           path: |
             test-results/*.png
-            evaluations/ci-openemr/**/*.json
-            evaluations/ci-openemr/**/*.png
-            evaluations/ci-external/result.json
-            evaluations/ci-backend/result.json
-            evaluations/ci-backend/analysis.json
-            evaluations/ci-queue/result.json
-            evaluations/ci-queue/review.json
-            evaluations/ci-queue/review.html
-            evaluations/ci-queue/understanding.json
+            evaluations/ci-*/**/*.json
           if-no-files-found: ignore
           retention-days: 7

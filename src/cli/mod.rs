@@ -1,3 +1,4 @@
+use mugiurushi::error::invalid;
 mod case;
 mod environment;
 use mugiurushi::review;
@@ -21,9 +22,6 @@ const HELP: &str = "mugiurushi
 
 引数なしで現在のアプリを起動します。local方式はOSによる隔離を行いません。";
 
-fn invalid(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message.into())
-}
 fn print_json(value: &impl serde::Serialize) -> io::Result<()> {
     println!(
         "{}",

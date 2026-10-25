@@ -58,7 +58,8 @@ try {
   const line = content.split('\n').findIndex(line => line.trim().startsWith('def call(')) + 1;
   assert.ok(line > 0);
   const snapshot = { schema: 1, fullName: source.repository, commit: beforeCommit, reference: beforeCommit, truncated: false, files: { [appPath]: content }, inventory: [{ path: appPath, size: Buffer.byteLength(content), mode: '100644', sha: git('rev-parse', beforeCommit + ':' + appPath) }], omitted: [] };
-  const response = await fetch(url + '/api/v1/repository', { method: 'POST', headers: { 'X-Review-Token': await readFile(tokenPath, 'utf8'), 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'analyze', snapshot, path: appPath, line }) });
+  const snapshotDirectory=join(casePath,'snapshots',snapshot.fullName);await mkdir(snapshotDirectory,{recursive:true});await writeFile(join(snapshotDirectory,snapshot.commit+'.json'),JSON.stringify(snapshot));
+  const response = await fetch(url + '/api/v1/understand', { method: 'POST', headers: { 'X-Review-Token': await readFile(tokenPath, 'utf8'), 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'analyze', repository: snapshot.fullName, commit: snapshot.commit, path: appPath, line }) });
   const analysis = await response.json(); assert.equal(response.status, 200, JSON.stringify(analysis));
   assert.ok(JSON.stringify(analysis).includes('call'));
   await writeFile(join(output, 'understanding.json'), JSON.stringify(analysis, null, 2));

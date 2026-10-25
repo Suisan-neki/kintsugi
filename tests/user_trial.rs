@@ -88,7 +88,7 @@ fn start() -> Change {
     }
 }
 fn revision_count(path: &Path) -> usize {
-    fs::read_dir(path.join("revisions")).unwrap().count()
+    load(path).unwrap().revision as usize
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! 試行の中で先に起動して待つプロセス（例：画像の受信サーバー）。
 //! 準備の完了は、基盤が割り当てた 127.0.0.1 のポートへ接続できるかで確かめる。
 //! 操作するプロセスが終わった後に基盤が止め、止めたことを待つプロセスの失敗として扱わない。
+use crate::error::invalid;
 use crate::python_env::Launch;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,10 +42,6 @@ pub struct ServerPhase {
     pub stdout_excerpt: String,
     pub stderr_excerpt: String,
     pub detail: String,
-}
-
-fn invalid(text: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, text.into())
 }
 
 pub fn validate(spec: &ServerSpec) -> io::Result<()> {
@@ -106,10 +103,11 @@ pub fn wait_ready(child: &mut Child, port: u16, timeout_ms: u64) -> io::Result<R
 
 /// 操作の後に待つプロセスを止める。自分で終了していたかどうかと終了コードを返す。
 pub fn stop(child: &mut Child) -> io::Result<(bool, Option<i32>)> {
-    if let Some(status) = child.try_wait()? {
+    let before = child.try_wait()?;
+    crate::process::kill_group(child)?;
+    if let Some(status) = before {
         return Ok((true, status.code()));
     }
-    child.kill()?;
     Ok((false, child.wait()?.code()))
 }
 

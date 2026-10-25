@@ -1,4 +1,5 @@
 //! 版を固定した構成と、確認事項・発言・試行への参照。接続線自体を観測の証拠にしない。
+use crate::error::invalid;
 use crate::{
     trial::{CheckMethod, Observed},
     workspace::{CodeReference, Workspace, validate_source},
@@ -128,9 +129,7 @@ pub enum ReportedMethod {
     #[serde(rename = "reported_assertion")]
     Assertion,
 }
-fn invalid(s: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, s)
-}
+
 fn id(s: &str) -> io::Result<()> {
     if s.is_empty()
         || s.len() > 128
