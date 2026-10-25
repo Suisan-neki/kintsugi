@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { resolve, join } from 'node:path';
+import { resolve, join, relative } from 'node:path';
 import { chromium } from 'playwright';
 const root = resolve(import.meta.dirname, '..'), live = process.argv.includes('--live');
 const temp = await mkdtemp(join(tmpdir(), 'eel-browser-handoff-')), data = join(temp, 'app');
@@ -24,7 +24,7 @@ for (const sha of [before, commit]) await writeFile(join(data, 'snapshots', repo
 const secrets = join(temp, 'secrets.json');
 await writeFile(secrets, JSON.stringify({ username: 'eel-operator', password: 'eel-pass-trial' }), { mode: 0o600 });
 const child = spawn(process.env.REVIEW_BINARY || join(root, 'target/debug/mugiurushi'), ['app', data, '--port', '0'], {
-  env: { ...process.env, EEL_BROWSER_SECRETS_FILE: secrets }, stdio: ['ignore', 'pipe', 'pipe'],
+  cwd: root, env: { ...process.env, EEL_BROWSER_SECRETS_FILE: relative(root, secrets) }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let browser;
 try {
@@ -85,6 +85,8 @@ try {
     v = await view(); const evidence = v.workspace.evidence.at(-1);
     assert.equal(evidence.check_id, 'soap-dialogue-check'); assert.equal(evidence.execution.recipe.source.commit, commit);
     assert.equal(evidence.execution.containers.browser.completed, true); assert.deepEqual(evidence.execution.containers.leftovers, []);
+    assert.match(evidence.execution.containers.database_query, /応答は 1$/);
+    assert.match(await page.locator('#result-body').innerText(), /ブラウザの実行: 記録した操作が完了した/);
     assert(evidence.execution.trial.results.every(r => r.observed === 'pass'));
     const actual = evidence.execution.recipe;
     const normalized = value => {

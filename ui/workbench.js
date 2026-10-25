@@ -1111,6 +1111,7 @@ function evidenceCard(check, v, e) {
       s.dependencies?.length ? h('p', {}, h('strong', {}, '依存先: '), s.dependencies.join('、'), '（固定コミットの読み込み先だけを複製。インストールはしていない）') : null,
       s.server ? h('p', {}, h('strong', {}, '先に起動するプロセス: '), s.server.started ? `${s.server.detail}。${s.server.exited_before_stop ? `麦漆が止める前に終了していた（終了コード ${s.server.exit_code ?? 'なし'}）` : s.server.stopped_by_platform ? '操作の後に麦漆が止めた' : ''}` : s.server.detail) : null,
       s.containers ? h('p', {}, h('strong', {}, '試験専用コンテナ: '), s.containers.services.map(x => `${x.name}（${x.ready ? `${x.ready_after_ms}msで準備` : '準備できず'}、127.0.0.1:${x.port}）`).join('、'), s.containers.leftovers?.length ? `。残った資源: ${s.containers.leftovers.join('、')}` : '。試行の後に消した') : null,
+      s.containers?.browser ? h('p', {}, h('strong', {}, 'ブラウザの実行: '), s.containers.browser.completed ? '記録した操作が完了した。' : s.containers.browser.prepared ? '準備はできたが、操作は完了していない。' : '準備できていない。', ' ', s.containers.browser.detail) : null,
       h('figure', { class: 'dads-table' }, h('figcaption', { class: 'dads-table__caption' }, '条件ごとの判定結果'),
         h('table', { class: 'dads-table__table', 'data-cell-border': 'bottom' },
           h('thead', {}, h('tr', {}, ['確認する範囲', '期待する結果', '観測した結果', '記録の取得元', '詳細'].map(t => h('th', { class: 'dads-table__col-header', scope: 'col' }, t)))),
