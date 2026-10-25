@@ -226,7 +226,7 @@ function renderUnderstand() {
     h('p', {}, f.entry.reason, ' ', refLinks([{ path: f.entry.path, line: f.entry.line, verified: true }])),
     h('p', {}, basis(f.kind), f.basis),
     flowList('受け取る入力', f.inputs), flowList('保存・削除', f.storage), flowList('外部への送信', f.sending), flowList('表示', f.outputs), flowList('失敗の扱い（例外・終了）', f.errors),
-    disclosure(`たどった関数（${f.steps.length} 件）`, h('ol', { class: 'items' }, f.steps.map(s => h('li', { style: `margin-left:${s.depth * 1.25}rem` }, `${s.function}（${s.path} ${s.line}〜${s.end_line}行目）`, ' ', refLinks(s.refs), s.called_from ? ` ← ${s.called_from.path} ${s.called_from.line}行目から呼ばれる候補` : '')))),
+    disclosure(`たどった関数（${f.steps.length} 件）`, h('ol', { class: 'items' }, f.steps.map(s => h('li', { class: 'call-step', 'data-depth': s.depth }, `${s.function}（${s.path} ${s.line}〜${s.end_line}行目）`, ' ', refLinks(s.refs), s.called_from ? ` ← ${s.called_from.path} ${s.called_from.line}行目から呼ばれる候補` : '')))),
     f.unresolved_calls ? h('p', { class: 'note' }, `呼び出し先を読み取っていないため、たどれなかった呼び出しが ${f.unresolved_calls} 件あります。`) : null));
   const behaviorsByFile = path => o.behaviors.filter(b => b.path === path);
   fill(body,

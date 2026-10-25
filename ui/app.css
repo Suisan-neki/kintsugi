@@ -57,6 +57,9 @@ p { margin: 0.5rem 0; }
 
 ul.items { padding-left: 1.25rem; margin: 0.5rem 0; }
 ul.items > li { margin: 0.5rem 0; }
+.call-step[data-depth="1"] { margin-left: 1.25rem; }
+.call-step[data-depth="2"] { margin-left: 2.5rem; }
+.call-step[data-depth="3"] { margin-left: 3.75rem; }
 .basis { display: inline-block; font-size: 0.8125rem; font-weight: bold; padding: 0 0.5rem; margin-right: 0.5rem; border: 1px solid currentColor; border-radius: 0.25rem; white-space: nowrap; }
 .basis[data-kind="code"] { color: var(--color-primitive-green-900); }
 .basis[data-kind="author"] { color: var(--color-key-1000); }

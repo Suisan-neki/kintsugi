@@ -43,3 +43,7 @@ EEL_BROWSER_SECRETS_FILE=/tmp/eel-openemr-secrets.json node tools/openemr-soap-s
 選択の根拠は固定版OpenEMRの`templates/encounter/forms/navbar.html.twig`、`interface/forms/soap/templates/soap_form.twig`、`interface/forms/soap/report.php`、`interface/forms/soap/table.sql`。画面操作はSOAPのフォームを使い、DBへの書込みで代用しない。ローカルにDockerがない場合、実際の保存・再表示と故障試験は専用のGitHub Actionsで検証する。
 
 実行後に`node tools/target-architecture-smoke.mjs openemr-soap`で、同じ事例のSOAP観測をOpenEMRの構成図へ対応づける。構成図の元の根拠は先行した患者・受診理由の試験で、DB・アプリ・ブラウザーの固定した構成を共用する。SOAPの操作の根拠は各試行のレシピで確認する。図・合成の疑問・SOAPの観測を往復し、DB停止時の未観測を正常時の成功で補わない。
+
+## DB停止の後に復旧して読み直す
+
+`tools/openemr-soap-smoke.mjs`は、DB停止の試行に`trial.recovery`を付けた`database-stopped-recovered`も実行する。DBを起動し直し、停止中に読めなかった患者・受診・SOAPの行を読み直す。患者と受診は1行、SOAPは停止中に保存操作が失敗しているため0行であることを確認する。同じDBで復旧した結果の読み直しであり、保存操作の再実行や実運用の復旧手順は含まない。2026年10月26日（日本時間）に[CI run 40213801704](https://github.com/Suisan-neki/mugiurushi/actions/runs/40213801704)でこのケースを実行し、患者・受診各1行、SOAPの各項目と識別用の行は0行、両サービスの準備、後片付け後の残骸0件を確認した。通常時・停止時・新しい環境での再試行と、画面からの試験実行も成功した。試験用の合成認証ファイルを使用し、人による評価や実運用の復旧試験ではない。

@@ -190,7 +190,7 @@ pub struct TrafficSummary {
     pub to: String,
     /// 開始した接続の数（`unfinished`を含む）。
     pub connections: u32,
-    /// 閉じた接続のうち、中継が対象へつなげなかった、または対象が応答せず閉じたもの。
+    /// 閉じた接続のうち、中継の状態が200以外だったもの。接続拒否だけでなく、クライアントの切断や中継停止を含む。アプリの処理の成否ではない。
     pub failed: u32,
     /// 開始したが、記録を取る時点までに閉じなかった接続。接続先が止まって待たされた接続を含む。
     #[serde(default)]
@@ -440,6 +440,14 @@ pub fn validate_spec(spec: &ContainerSpec) -> io::Result<()> {
         if service.role == ServiceRole::Database {
             databases += 1;
         }
+    }
+    if spec.egress == Egress::Blocked
+        && spec
+            .services
+            .iter()
+            .any(|s| names.contains(format!("{}-real", s.name).as_str()))
+    {
+        return Err(invalid("コンテナの名前が中継用の接続先名と重複しています"));
     }
     if databases > 1 {
         return Err(invalid("データベースの役割のコンテナは1件にしてください"));
@@ -821,18 +829,19 @@ impl Session {
         let mut rows: BTreeMap<(String, String), TrafficSummary> = BTreeMap::new();
         let mut unparsed = 0usize;
         let mut truncated = false;
+        let mut unavailable = vec![];
         for service in &self.services {
             let Some(tap) = &service.tap else { continue };
             let edge_ip = addresses.edges.get(tap);
-            let output = docker(&["logs", tap]).ok();
-            let (text, errors) = output
-                .map(|o| {
-                    (
-                        String::from_utf8_lossy(&o.stdout).into_owned(),
-                        String::from_utf8_lossy(&o.stderr).into_owned(),
-                    )
-                })
-                .unwrap_or_default();
+            let output = match docker(&["logs", tap]) {
+                Ok(output) if output.status.success() => output,
+                _ => {
+                    unavailable.push(service.spec.name.as_str());
+                    continue;
+                }
+            };
+            let text = String::from_utf8_lossy(&output.stdout);
+            let errors = String::from_utf8_lossy(&output.stderr);
             if text.len() > MAX_TRAFFIC_LOG || errors.len() > MAX_TRAFFIC_LOG {
                 truncated = true;
             }
@@ -860,16 +869,26 @@ impl Session {
                     let from = clients
                         .get(&client)
                         .cloned()
-                        .unwrap_or_else(|| HOST_CLIENT.to_owned());
+                        .unwrap_or_else(|| format!("不明（{client}）"));
                     record_unfinished(&mut rows, &from, &service.spec.name);
                 }
             }
         }
         let mut summary: Vec<TrafficSummary> = rows.into_values().collect();
+        let omitted_rows = summary.len().saturating_sub(MAX_TRAFFIC_ROWS);
         summary.truncate(MAX_TRAFFIC_ROWS);
         let mut note = String::from(
-            "中継を通った接続（接続元・接続先の対象、成否、バイト数）を記録した。閉じなかった接続は件数だけで、成否とバイト数は分からない。中継を通らない通信と、通信の中身は記録していない",
+            "中継を通った接続（接続元・接続先の対象、中継の状態、バイト数）を記録した。失敗件数は中継の状態が200以外の接続で、クライアントの切断や中継停止も含み、アプリの処理の成否ではない。閉じなかった接続は件数だけで、成否とバイト数は分からない。中継を通らない通信と、通信の中身は記録していない",
         );
+        if !unavailable.is_empty() {
+            note.push_str(&format!(
+                "。中継ログを取得できず未観測の対象: {}",
+                unavailable.join("、")
+            ));
+        }
+        if omitted_rows > 0 {
+            note.push_str(&format!("。集計の上限により{omitted_rows}組を省略した"));
+        }
         if unparsed > 0 {
             note.push_str(&format!("。読み取れない行が{unparsed}件あった"));
         }
@@ -961,6 +980,28 @@ impl Session {
     }
 
     pub fn remount_database_read_only(&mut self) -> io::Result<bool> {
+        let index = self.recreate_database(true)?;
+        let probe_path = format!(
+            "{}/.eel-write-probe",
+            self.services[index].spec.volumes[0].path
+        );
+        let writable = self.writable(index, &probe_path);
+        self.services[index].detail = if writable {
+            "保存先のボリュームを読み取り専用で載せ直したが、コンテナ内から書き込めた".into()
+        } else {
+            "保存先のボリュームを読み取り専用で載せ直した".into()
+        };
+        Ok(!writable)
+    }
+
+    fn writable(&self, index: usize, probe_path: &str) -> bool {
+        docker(&["exec", &self.services[index].container, "touch", probe_path])
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// データベースのコンテナを消して、同じボリュームで作り直す。`read_only`なら読み取り専用で載せる。
+    fn recreate_database(&mut self, read_only: bool) -> io::Result<usize> {
         let Some(index) = self
             .services
             .iter()
@@ -1004,24 +1045,94 @@ impl Session {
         for volume in &spec.volumes {
             args.push("--mount".into());
             args.push(format!(
-                "type=volume,source=eel-{}-{},target={},readonly",
-                self.trial, volume.name, volume.path
+                "type=volume,source=eel-{}-{},target={}{}",
+                self.trial,
+                volume.name,
+                volume.path,
+                if read_only { ",readonly" } else { "" }
             ));
         }
         args.push(spec.image.clone());
         args.extend(spec.command.iter().cloned());
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         docker_text(&arg_refs)?;
-        let probe_path = format!("{}/.eel-write-probe", spec.volumes[0].path);
-        let writable = docker(&["exec", &container, "touch", &probe_path])
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        self.services[index].detail = if writable {
-            "保存先のボリュームを読み取り専用で載せ直したが、コンテナ内から書き込めた".into()
-        } else {
-            "保存先のボリュームを読み取り専用で載せ直した".into()
+        Ok(index)
+    }
+
+    /// 故障を解除する。解除後の状態を読み出して確かめ、確かめられた場合だけ`true`を返す。
+    pub fn restore_database(&mut self, fault: crate::trial::TrialFault) -> io::Result<bool> {
+        use crate::trial::TrialFault;
+        let Some(index) = self
+            .services
+            .iter()
+            .position(|s| s.spec.role == ServiceRole::Database)
+        else {
+            return Err(invalid("データベースの役割のコンテナがありません"));
         };
-        Ok(!writable)
+        let (effective, detail) = match fault {
+            TrialFault::DatabaseStopped => {
+                docker_text(&["start", &self.services[index].container])?;
+                let running = inspect_running(&self.services[index].container)?;
+                (running, "データベースのコンテナを起動し直した")
+            }
+            TrialFault::DatabaseUnreachable => {
+                let alias = self.alias(&self.services[index].spec.name);
+                docker_text(&[
+                    "network",
+                    "connect",
+                    "--alias",
+                    &alias,
+                    &self.network,
+                    &self.services[index].container,
+                ])?;
+                let connected = inspect_network(&self.services[index].container, &self.network)?;
+                (connected, "データベースを試験用ネットワークへ接続し直した")
+            }
+            TrialFault::VolumeReadOnly => {
+                let index = self.recreate_database(false)?;
+                let probe_path = format!(
+                    "{}/.eel-write-probe",
+                    self.services[index].spec.volumes[0].path
+                );
+                // 起動直後はまだ受け付けないことがあるため、書き込めるまで短く待つ。
+                let writable = (0..20).any(|_| {
+                    let ok = self.writable(index, &probe_path);
+                    if !ok {
+                        thread::sleep(Duration::from_millis(500));
+                    }
+                    ok
+                });
+                (writable, "保存先のボリュームを書き込み可能で載せ直した")
+            }
+            _ => return Err(invalid("この故障には復旧の操作がありません")),
+        };
+        self.services[index].detail = if effective {
+            format!("{detail}。解除後の状態を確かめた")
+        } else {
+            format!("{detail}が、解除後の状態を確かめられなかった")
+        };
+        Ok(effective)
+    }
+
+    /// 復旧後に、各コンテナが準備できるまで待つ。準備できなかったことも記録する。
+    pub fn settle(&mut self, timeout_ms: u64) -> Vec<crate::trial::RecoveredService> {
+        let timeout = Duration::from_millis(timeout_ms);
+        let mut out = vec![];
+        for service in &mut self.services {
+            let result = wait_ready_for(service, timeout);
+            let (ready, ms, detail) = match result {
+                Ok(ms) => (true, Some(ms), format!("復旧後に準備できた（{ms}ms）")),
+                Err(error) => (false, None, error.to_string()),
+            };
+            service.ready = ready;
+            out.push(crate::trial::RecoveredService {
+                name: service.spec.name.clone(),
+                ready,
+                ready_after_ms: ms,
+                detail,
+            });
+        }
+        out
     }
 
     pub fn query_database(&self) -> Option<String> {
@@ -1313,8 +1424,14 @@ fn pull(image: &str) -> io::Result<String> {
 }
 
 fn wait_ready(running: &Running) -> io::Result<u64> {
+    wait_ready_for(
+        running,
+        Duration::from_millis(running.spec.ready_timeout_ms),
+    )
+}
+
+fn wait_ready_for(running: &Running, timeout: Duration) -> io::Result<u64> {
     let started = Instant::now();
-    let timeout = Duration::from_millis(running.spec.ready_timeout_ms);
     loop {
         if !inspect_running(&running.container)? {
             return Err(io::Error::other(format!(
@@ -1347,7 +1464,7 @@ fn wait_ready(running: &Running) -> io::Result<u64> {
             return Err(io::Error::other(format!(
                 "コンテナ {} が {}ms 以内に準備できなかった: {}",
                 running.spec.name,
-                running.spec.ready_timeout_ms,
+                timeout.as_millis(),
                 logs(&running.container)
             )));
         }
@@ -1642,6 +1759,24 @@ mod tests {
             egress: Egress::default(),
         };
         assert!(validate_spec(&spec).is_err());
+    }
+
+    #[test]
+    fn service_names_cannot_shadow_another_services_real_alias() {
+        let mut spec: ContainerSpec = serde_json::from_str(
+            r#"{"services":[{"name":"app","image":"nginx:1.27.4-alpine@sha256:4ff102c5d78d254a6f0da062b3cf39eaf07f01eec0927fd21e219d0af8bc0591","role":"app","expose":80,"ready":"tcp","ready_timeout_ms":5000}]}"#,
+        ).unwrap();
+        let mut other = spec.services[0].clone();
+        other.name = "app-real".into();
+        spec.services.push(other);
+        assert!(
+            validate_spec(&spec)
+                .unwrap_err()
+                .to_string()
+                .contains("中継用")
+        );
+        spec.egress = Egress::Allowed;
+        assert!(validate_spec(&spec).is_ok());
     }
 
     #[test]

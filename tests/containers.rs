@@ -107,6 +107,7 @@ fn recipe(
         timeout_ms: 30000,
         trial: Some(TrialSpec {
             schema_version: 1,
+            recovery: None,
             fault,
             storage: None,
             readback: None,
@@ -459,6 +460,108 @@ fn disconnecting_the_database_is_effective() {
         serde_json::from_str(&fs::read_to_string(result.directory.join("execution.json")).unwrap())
             .unwrap();
     assert!(trace.trial.as_ref().unwrap().fault_effective);
+}
+
+/// 故障の後に解除して、復旧後の状態を読み直す。解除の実行と、解除後の準備を記録する。
+fn recovery_after(fault: TrialFault, database_volume: bool) -> TrialOutcome {
+    let (directory, root, commit) = fixture();
+    let mut db = nginx("db", ServiceRole::Database);
+    if database_volume {
+        db.volumes = vec![VolumeMount {
+            name: "data".into(),
+            path: "/data".into(),
+        }];
+    }
+    let mut recipe = recipe(
+        &commit,
+        vec![nginx("web", ServiceRole::App), db],
+        fault,
+        vec![check(
+            "welcome",
+            "応答",
+            CheckMethod::Stdout,
+            Expectation::Contains,
+            "Welcome to nginx",
+        )],
+    );
+    recipe.trial.as_mut().unwrap().recovery = Some(Recovery {
+        ready_timeout_ms: 30_000,
+    });
+    let result = execute(
+        &root,
+        &directory.join("runs"),
+        recipe,
+        Condition {
+            id: "web".into(),
+            version: 1,
+            text: "故障を解除した後の状態を記録する".into(),
+            origin: "試験".into(),
+            kind: ConditionKind::Custom,
+        },
+        None,
+    )
+    .unwrap();
+    let trace: ExecutionTrace =
+        serde_json::from_str(&fs::read_to_string(result.directory.join("execution.json")).unwrap())
+            .unwrap();
+    assert!(
+        trace
+            .trial
+            .as_ref()
+            .unwrap()
+            .containers
+            .as_ref()
+            .unwrap()
+            .leftovers
+            .is_empty()
+    );
+    trace.trial.expect("trial")
+}
+
+fn assert_recovered(trial: &TrialOutcome) {
+    assert!(trial.fault_effective, "{}", trial.fault_applied);
+    let recovery = trial.recovery.as_ref().expect("復旧の記録");
+    assert!(
+        recovery.attempted && recovery.effective,
+        "{}",
+        recovery.applied
+    );
+    assert!(
+        recovery.services.iter().all(|s| s.ready),
+        "{:?}",
+        recovery.services
+    );
+    assert!(
+        recovery.limits.contains("再実行"),
+        "分からないことを記録している"
+    );
+}
+
+#[test]
+#[ignore = "Dockerと固定イメージを使うため、手動・週次の統合試験で実行"]
+fn stopped_database_comes_back_after_recovery() {
+    if !docker_available() {
+        return;
+    }
+    assert_recovered(&recovery_after(TrialFault::DatabaseStopped, false));
+}
+
+#[test]
+#[ignore = "Dockerと固定イメージを使うため、手動・週次の統合試験で実行"]
+fn disconnected_database_is_reachable_again_after_recovery() {
+    if !docker_available() {
+        return;
+    }
+    assert_recovered(&recovery_after(TrialFault::DatabaseUnreachable, false));
+}
+
+#[test]
+#[ignore = "Dockerと固定イメージを使うため、手動・週次の統合試験で実行"]
+fn read_only_volume_is_writable_again_after_recovery() {
+    if !docker_available() {
+        return;
+    }
+    assert_recovered(&recovery_after(TrialFault::VolumeReadOnly, true));
 }
 
 const ORTHANC: &str = "orthancteam/orthanc:26.9.1@sha256:d2705f2c56547e55ce9bc2250fd22d05d326493b3f3d9fa191ecb7db8ca6b5a2";

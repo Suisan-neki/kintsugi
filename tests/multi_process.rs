@@ -229,6 +229,7 @@ const SERVE: &[&str] = &["serve", PORT, "received"];
 fn normal() -> TrialSpec {
     TrialSpec {
         schema_version: 1,
+        recovery: None,
         fault: TrialFault::Normal,
         storage: Some("received/received.txt".into()),
         readback: Some(Readback {
@@ -271,6 +272,7 @@ fn normal() -> TrialSpec {
 fn failure_reported(fault: TrialFault) -> TrialSpec {
     TrialSpec {
         schema_version: 1,
+        recovery: None,
         fault,
         storage: Some("received/received.txt".into()),
         readback: None,
