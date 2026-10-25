@@ -49,7 +49,7 @@ jobs:
             target
           key: ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
-            ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock') }}-
+            ${{ runner.os }}-rust-1.99-
       - run: rustup toolchain install 1.99.0 --profile minimal --component clippy
       - run: cargo check --locked
       - run: cargo test --locked
