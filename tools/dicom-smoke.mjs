@@ -104,11 +104,11 @@ try {
     await form.getByLabel('引数', { exact: true }).fill(['storescu', '-v', '127.0.0.1', '{{port}}', SAMPLE].join('\n'));
     await form.getByLabel('保存先', { exact: true }).fill(STORED);
     await form.getByLabel('依存先', { exact: true }).fill(`pydicom/pydicom ${PYDICOM} src`);
-    const wait = form.locator('fieldset', { hasText: '先に起動するプロセス' });
+    const wait = form.getByRole('group', { name: '先に起動するプロセス（任意）', exact: true });
     await wait.getByLabel('先に起動するプロセス', { exact: true }).fill(server ? 'pynetdicom' : '');
     await wait.getByLabel('起動のしかた').selectOption('module');
     await wait.getByLabel('先に起動するプロセスの引数').fill(['storescp', '{{port}}', '-ba', '127.0.0.1', '-od', 'received'].join('\n'));
-    const back = form.locator('fieldset', { hasText: '後から読み出す' });
+    const back = form.getByRole('group', { name: '後から読み出す（任意）', exact: true });
     await back.getByLabel('読み出し用の起動対象').fill(readback ? 'pydicom' : '');
     await back.getByLabel('起動のしかた').selectOption('script');
     await back.getByLabel('読み出しの引数').fill(['show', STORED].join('\n'));
@@ -121,7 +121,7 @@ try {
       const row = form.locator('.check-row').nth(i);
       await row.getByLabel('確認する範囲').fill(c.scope);
       await row.getByLabel('観測の方法').selectOption(c.method);
-      await row.getByLabel('期待').selectOption(c.expect);
+      await row.getByLabel('期待する結果', { exact: true }).selectOption(c.expect);
       if (c.text) await row.getByLabel('文字列').fill(c.text);
     }
   };
