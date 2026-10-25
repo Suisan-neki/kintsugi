@@ -461,6 +461,7 @@ impl Session {
         for key in [
             "PATH",
             "PLAYWRIGHT_BROWSERS_PATH",
+            "CHROME_DEVEL_SANDBOX",
             "EEL_BROWSER_EXECUTABLE",
             "EEL_BROWSER_EXTRA_ARGS",
         ] {

@@ -15,7 +15,8 @@ use std::{
 
 mod storage;
 
-const MAX_DOCUMENT: u64 = 64 * 1024 * 1024;
+const MAX_DOCUMENT: u64 = 4 * 1024 * 1024;
+pub(crate) const MAX_WORKSPACE: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

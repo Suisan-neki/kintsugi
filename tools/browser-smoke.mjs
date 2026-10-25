@@ -9,7 +9,7 @@ import {chromium} from 'playwright';
 import {createHash} from 'node:crypto';
 const root=resolve(import.meta.dirname,'..');
 const temp=await mkdtemp(join(tmpdir(),'eel-browser-'));
-const launched=await chromium.launch({headless:true,executablePath:process.env.EEL_BROWSER_EXECUTABLE||undefined,args:['--no-sandbox',...JSON.parse(process.env.EEL_BROWSER_EXTRA_ARGS||'[]')]});const version=launched.version();await launched.close();
+const launched=await chromium.launch({channel:'chromium',headless:true,chromiumSandbox:true,timeout:15000,executablePath:process.env.EEL_BROWSER_EXECUTABLE||undefined,args:JSON.parse(process.env.EEL_BROWSER_EXTRA_ARGS||'[]')});const version=launched.version();await launched.close();
 let database=true,stored='',requests=[];
 const server=createServer(async(req,res)=>{requests.push(req.url);
  if(req.url==='/save'){let body='';for await(const chunk of req)body+=chunk;if(database)stored=body;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({message:'保存しました'}));return;}
@@ -42,14 +42,18 @@ const spec={service:'web',tls:false,start_path:'/',expected_version:version,
  responses:[{id:'save',path:'/save',method:'POST',contains:'保存しました'},{id:'frame',path:'/frame',method:'GET',payload:'dicom_frame'}],database:[]};
 const secretsPath=join(temp,'secrets.json');await writeFile(secretsPath,JSON.stringify({user:'synthetic-operator-secret',password:'synthetic-password-secret'}),{mode:0o600});
 const live=new Set();
-async function waitFile(file,child){for(let i=0;i<1000;i++){if(await stat(file).then(()=>true,()=>false))return JSON.parse(await readFile(file,'utf8'));if(child.exitCode!==null)throw Error('runner stopped without '+file);await new Promise(r=>setTimeout(r,20));}throw Error('runner timed out');}
+// 低速な開発機では起動時間も含めて試験の期限を延ばせる。本番の実行期限には影響しない。
+const budgetScale=Number(process.env.EEL_BROWSER_SMOKE_TIMEOUT_SCALE||1);
+assert.ok(Number.isFinite(budgetScale)&&budgetScale>=1&&budgetScale<=10);
+async function waitFile(file,child,timeout_ms){const until=Date.now()+timeout_ms+10000;while(Date.now()<until){if(await stat(file).then(()=>true,()=>false))return JSON.parse(await readFile(file,'utf8'));if(child.exitCode!==null)throw Error('runner stopped without '+file);await new Promise(r=>setTimeout(r,20));}throw Error('runner timed out');}
 async function run(name,config,fault=false,timeout_ms=10000,overrides={}){const dir=join(temp,name);await mkdir(dir);const run_id='synthetic-'+name;
+ if(name!=='startup-timeout')timeout_ms*=budgetScale;
  await writeFile(join(dir,'request.json'),JSON.stringify({schema_version:1,spec:config,run_id,test_value:run_id,origin,origins:[origin],timeout_ms}));
  const child=spawn(process.execPath,[join(root,'tools/browser-runner.mjs'),join(dir,'request.json')],{env:{...process.env,EEL_PLAYWRIGHT_MODULE:join(root,'node_modules/playwright/index.mjs'),EEL_PNGJS_MODULE:join(root,'node_modules/pngjs/lib/png.js'),EEL_BROWSER_SECRETS_FILE:secretsPath,...overrides},stdio:'pipe'});live.add(child);let stderr='';child.stderr.on('data',d=>stderr+=d);child.stdout.resume();
  const exit=new Promise(r=>child.once('exit',r));
- const ready=await waitFile(join(dir,'ready.json'),child);
+ const ready=await waitFile(join(dir,'ready.json'),child,timeout_ms).catch(error=>{throw new Error(`${name}: ${error.message}\n${stderr}`,{cause:error});});
  if(ready.prepared){assert.equal(requests.filter(p=>p==='/save').length,0);if(fault)database=false;await writeFile(join(dir,'continue.json'),JSON.stringify({run_id,proceed:true}));}
- const result=await waitFile(join(dir,'result.json'),child);assert.equal(await exit,0,stderr);live.delete(child);
+ const result=await waitFile(join(dir,'result.json'),child,timeout_ms).catch(error=>{throw new Error(`${name}: ${error.message}\n${stderr}`,{cause:error});});assert.equal(await exit,0,stderr);live.delete(child);
  const json=JSON.stringify(result);assert.ok(!json.includes('synthetic-password-secret'));assert.ok(!json.includes('synthetic-operator-secret'));
  return result;
 }

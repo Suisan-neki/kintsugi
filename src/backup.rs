@@ -158,7 +158,7 @@ pub fn validate(backup: &Backup) -> io::Result<()> {
                 .map_err(io::Error::other)?
                 .len()
                 + 1
-                > 4 * 1024 * 1024
+                > workspace::MAX_WORKSPACE as usize
         {
             return Err(invalid("バックアップの事例・版・更新履歴が一致しません"));
         }

@@ -96,7 +96,7 @@ async function steps(list,phase){
 try{
  if(process.env.EEL_BROWSER_SECRETS_FILE)secrets=JSON.parse(await fs.readFile(process.env.EEL_BROWSER_SECRETS_FILE,'utf8'));
  const {chromium}=await import(pathToFileURL(process.env.EEL_PLAYWRIGHT_MODULE).href);
- browser=await chromium.launch({headless:true,chromiumSandbox:true,timeout:Math.max(1,Math.min(15000,deadline-Date.now())),executablePath:process.env.EEL_BROWSER_EXECUTABLE||undefined,args:report.launch_args});report.version=browser.version();
+ browser=await chromium.launch({channel:'chromium',headless:true,chromiumSandbox:true,timeout:Math.max(1,Math.min(15000,deadline-Date.now())),executablePath:process.env.EEL_BROWSER_EXECUTABLE||undefined,args:report.launch_args});report.version=browser.version();
  if(report.version!==spec.expected_version)throw Error('ブラウザの版が試験設定と異なる');
  const context=await browser.newContext({viewport:{width:1440,height:1000},ignoreHTTPSErrors:spec.tls,serviceWorkers:'block',acceptDownloads:false});
  await context.route('**/*',async route=>{let allowed=false;try{allowed=request.origins.includes(new URL(route.request().url()).origin);}catch{}if(allowed)await route.continue();else{report.blocked_requests++;await route.abort('blockedbyclient');}});

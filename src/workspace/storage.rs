@@ -1,6 +1,6 @@
 //! SQLiteのトランザクションで版を公開し、変更しない項目の本文を共用する。
 //! 通常の読出しでは最新版の索引だけを使い、旧JSON形式は初回に取り込む。
-use super::{MAX_DOCUMENT, Workspace, invalid, validate};
+use super::{MAX_WORKSPACE, Workspace, invalid, validate};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -122,7 +122,7 @@ impl Write {
         validate(workspace)?;
         let revision = i64::try_from(workspace.revision).map_err(io::Error::other)?;
         let value = serde_json::to_value(workspace).map_err(io::Error::other)?;
-        if serde_json::to_vec(&value).map_err(io::Error::other)?.len() as u64 > MAX_DOCUMENT {
+        if serde_json::to_vec(&value).map_err(io::Error::other)?.len() as u64 > MAX_WORKSPACE {
             return Err(invalid(
                 "事例が64MiBを超えています。別の事例に分けてください",
             ));
@@ -297,7 +297,7 @@ fn read_revision(connection: &Connection, revision: u64) -> io::Result<Workspace
     {
         let (field, position, body) = row.map_err(sql)?;
         size += body.len() as u64;
-        if size > MAX_DOCUMENT {
+        if size > MAX_WORKSPACE {
             return Err(invalid("事例が64MiBを超えています"));
         }
         let item = serde_json::from_slice(&body).map_err(io::Error::other)?;
@@ -446,6 +446,24 @@ mod tests {
         )
         .unwrap();
     }
+    #[test]
+    fn a_case_larger_than_the_legacy_document_limit_can_be_backed_up_and_restored() {
+        let case = Case::new("large");
+        let restored = Case::new("large-restored");
+        let mut workspace = workspace::empty_workspace("test".into(), "大きい合成事例".into());
+        for i in 0..24 {
+            workspace
+                .context
+                .insert(format!("value-{i}"), "x".repeat(200 * 1024));
+        }
+        workspace::initialize(&case.0, workspace, "合成", "4MiBを超える事例の保存").unwrap();
+        let backup = crate::backup::snapshot(&case.0).unwrap();
+        assert!(serde_json::to_vec(&backup).unwrap().len() > 4 * 1024 * 1024);
+        let view = crate::backup::restore(&restored.0, &backup).unwrap();
+        assert_eq!(view.workspace.context.len(), 24);
+        assert_eq!(view.workspace.context["value-23"].len(), 200 * 1024);
+    }
+
     #[test]
     fn legacy_history_is_imported_atomically_and_later_reads_use_the_database() {
         let case = Case::new("legacy");
