@@ -46,4 +46,4 @@ EEL_BROWSER_SECRETS_FILE=/tmp/eel-openemr-secrets.json node tools/openemr-soap-s
 
 ## DB停止の後に復旧して読み直す
 
-`tools/openemr-soap-smoke.mjs`は、DB停止の試行に`trial.recovery`を付けた`database-stopped-recovered`も実行する。DBを起動し直し、停止中に読めなかった患者・受診・SOAPの行を読み直す。患者と受診は1行、SOAPは停止中に保存操作が失敗しているため0行であることを確認する。同じDBで復旧した結果の読み直しであり、保存操作の再実行や実運用の復旧手順は含まない。このスクリプトは試験用の認証ファイルが必要で、変更を入れた時点では実行していない。
+`tools/openemr-soap-smoke.mjs`は、DB停止の試行に`trial.recovery`を付けた`database-stopped-recovered`も実行する。DBを起動し直し、停止中に読めなかった患者・受診・SOAPの行を読み直す。患者と受診は1行、SOAPは停止中に保存操作が失敗しているため0行であることを確認する。同じDBで復旧した結果の読み直しであり、保存操作の再実行や実運用の復旧手順は含まない。2026年10月26日（日本時間）に[CI run 40213801704](https://github.com/Suisan-neki/mugiurushi/actions/runs/40213801704)でこのケースを実行し、患者・受診各1行、SOAPの各項目と識別用の行は0行、両サービスの準備、後片付け後の残骸0件を確認した。通常時・停止時・新しい環境での再試行と、画面からの試験実行も成功した。試験用の合成認証ファイルを使用し、人による評価や実運用の復旧試験ではない。
