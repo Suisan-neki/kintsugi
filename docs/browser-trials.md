@@ -2,7 +2,7 @@
 
 `runtime: "browser"` のRecipeで、試験用コンテナの画面をChromiumから操作する。既存のAPI・CLIのRecipe読込を使える。`npm ci --ignore-scripts` と `npx playwright install --with-deps chromium` がサーバー側に必要。Playwrightはpackage-lockで固定し、`browser.expected_version` と実際のブラウザの版が一致しなければ操作を始めない。版は `node_modules/playwright-core/browsers.json` に記載される。
 
-ChromiumはPlaywrightに固定された通常版をheadlessモードで起動し、OSのサンドボックスを有効にする。起動できない環境では試験を未完了として記録し、`--no-sandbox`へ切り替えない。UbuntuでAppArmorがuser namespaceを制限する場合、CIは導入済みChromeの`/opt/google/chrome/chrome-sandbox`を`CHROME_DEVEL_SANDBOX`で指定する。ローカル環境でも[Chromium公式の手順](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md)に従ってサンドボックスを用意する。Nodeの制御処理自体はホストで動き、ブラウザのサンドボックスとは別の範囲になる。
+ChromiumはPlaywrightに固定された通常版をheadlessモードで起動し、OSのサンドボックスを有効にする。起動できない環境では試験を未完了として記録し、`--no-sandbox`へ切り替えない。UbuntuでAppArmorがuser namespaceを制限する場合、CIは導入済みChromeのsandbox helperを使うか、固定したChromiumの実行ファイルの正確なパスだけをAppArmorの例外にする。OS全体のuser namespace制限は解除しない。ローカル環境でも[Chromium公式の手順](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md)に従ってサンドボックスを用意する。Nodeの制御処理自体はホストで動き、ブラウザのサンドボックスとは別の範囲になる。
 
 流れは、コンテナの準備 → `browser.preparation`（ログインなど）→ 故障の注入 → `browser.actions`（保存など）→ DBの直接読取 → コンテナ停止・掃除。各操作はラベル・役割、またはCSSで対象を指定する。iframeは`target.frames`のCSSセレクターで親から順に選ぶ。任意のJavaScriptを設定から実行する機能はない。
 
