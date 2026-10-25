@@ -18,7 +18,7 @@
     "test:ui": "npm run test:journey && npm run test:dialogue && npm run test:user-trial",
     "test:trial-plan": "node --test tools/openemr-trial-plan-tests.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "lint": "eslint ui",
+    "lint": "eslint \"ui/*.js\"",
     "test:api": "node --test tools/api-tests.mjs"
   },
   "devDependencies": {

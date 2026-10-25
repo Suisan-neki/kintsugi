@@ -25,7 +25,8 @@ pub(super) fn failure(status: u16, message: &str) -> Response {
     let _ = json(&mut response, status, &serde_json::json!({"error":message}));
     response
 }
-fn authorize(request: &HttpRequest, server: &Server) -> Result<(), Response> {
+struct Rejection(u16, &'static str);
+fn authorize(request: &HttpRequest, server: &Server) -> Result<(), Rejection> {
     for name in [
         "host",
         "origin",
@@ -34,7 +35,7 @@ fn authorize(request: &HttpRequest, server: &Server) -> Result<(), Response> {
         "content-length",
     ] {
         if request.headers().get_all(name).iter().count() > 1 {
-            return Err(failure(400, "HTTPヘッダーが重複しています"));
+            return Err(Rejection(400, "HTTPヘッダーが重複しています"));
         }
     }
     let host = request
@@ -44,11 +45,11 @@ fn authorize(request: &HttpRequest, server: &Server) -> Result<(), Response> {
         .unwrap_or("");
     if host != format!("127.0.0.1:{}", server.port) && host != format!("localhost:{}", server.port)
     {
-        return Err(failure(403, "localhostのHostだけを受け付けます"));
+        return Err(Rejection(403, "localhostのHostだけを受け付けます"));
     }
     let path = request.uri().path();
     if path.starts_with("/api/") && !path.starts_with("/api/v1/") {
-        return Err(failure(
+        return Err(Rejection(
             410,
             "旧APIは廃止しました。/api/v1/を使用してください",
         ));
@@ -59,7 +60,7 @@ fn authorize(request: &HttpRequest, server: &Server) -> Result<(), Response> {
         .and_then(|v| v.to_str().ok())
         == Some(&server.token);
     if path.starts_with("/api/v1/") && path != "/api/v1/capabilities" && !authenticated {
-        return Err(failure(403, "APIの操作トークンが必要です"));
+        return Err(Rejection(403, "APIの操作トークンが必要です"));
     }
     if !matches!(
         *request.method(),
@@ -74,7 +75,7 @@ fn authorize(request: &HttpRequest, server: &Server) -> Result<(), Response> {
                 .and_then(|v| v.to_str().ok())
                 != Some("application/json")
         {
-            return Err(failure(
+            return Err(Rejection(
                 403,
                 "画面のOrigin・操作トークン・JSON形式が必要です",
             ));
@@ -85,7 +86,7 @@ fn authorize(request: &HttpRequest, server: &Server) -> Result<(), Response> {
 async fn gate(State(server): State<Server>, request: HttpRequest, next: Next) -> Response {
     match authorize(&request, &server) {
         Ok(()) => next.run(request).await,
-        Err(response) => response,
+        Err(Rejection(status, message)) => failure(status, message),
     }
 }
 async fn handle(server: Server, request: HttpRequest) -> Response {
@@ -263,7 +264,7 @@ pub(super) fn connection(
                     let request = request.map(Body::new);
                     let response = match authorize(&request, &server) {
                         Ok(()) => handle(server, request).await,
-                        Err(response) => response,
+                        Err(Rejection(status, message)) => failure(status, message),
                     };
                     Ok::<_, std::convert::Infallible>(response)
                 }

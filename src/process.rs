@@ -101,9 +101,12 @@ mod tests {
 
     #[test]
     fn cleanup_keeps_other_process_groups_alive() {
-        let mut unrelated = Command::new("sh").args(["-c", "sleep 2"]).spawn().unwrap();
+        let mut unrelated = Command::new("sh")
+            .args(["-c", "exec sleep 2"])
+            .spawn()
+            .unwrap();
         let mut command = Command::new("sh");
-        command.args(["-c", "sleep 2"]);
+        command.args(["-c", "exec sleep 2"]);
         drop(ChildGuard::spawn(&mut command).unwrap());
         assert!(unrelated.try_wait().unwrap().is_none());
         unrelated.kill().unwrap();

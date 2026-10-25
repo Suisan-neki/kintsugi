@@ -39,13 +39,15 @@ export async function apiRequest(method, path, body, operationToken = token()) {
     notice.append(label, document.createTextNode(' '), cancel);
     document.getElementById('status')?.after(notice);
   }
+  let delay = 50;
   try {
     while (data.status === 'queued' || data.status === 'running') {
       if (label) label.textContent = data.status === 'queued' ? '処理の開始を待っています' : '読取・AI処理を実行しています';
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, 500);
       data = await decode(await fetch(jobPath, { headers: { 'X-Review-Token': operationToken } }));
     }
-    if (data.status === 'cancelled') throw new ApiError('結果の待受を中止しました。送信済みの処理と保存は完了する場合があります', 409);
+    if (data.status === 'cancelled') throw new Error('結果の待受を中止しました。送信済みの処理と保存は完了する場合があります');
     if (data.status !== 'completed' || typeof data.response_status !== 'number') throw new ApiError('処理状態を読み取れません', 500);
     if (data.response_status >= 400) throw new ApiError(data.result?.error || `HTTP ${data.response_status}`, data.response_status);
     return data.result;

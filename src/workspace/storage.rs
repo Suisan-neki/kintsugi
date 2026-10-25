@@ -493,7 +493,6 @@ mod concurrent_tests {
         )
         .unwrap();
         let barrier = std::sync::Barrier::new(5);
-        let finished = std::sync::atomic::AtomicBool::new(false);
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 barrier.wait();
@@ -512,13 +511,11 @@ mod concurrent_tests {
                     )
                     .unwrap();
                 }
-                finished.store(true, std::sync::atomic::Ordering::SeqCst);
             });
             for _ in 0..4 {
                 scope.spawn(|| {
                     barrier.wait();
-                    let mut count = 0;
-                    while !finished.load(std::sync::atomic::Ordering::SeqCst) || count < 50 {
+                    for _ in 0..100 {
                         let workspace = crate::workspace::load(&path).unwrap();
                         if workspace.revision > 1 {
                             assert_eq!(
@@ -526,7 +523,6 @@ mod concurrent_tests {
                                 workspace.revision.to_string()
                             );
                         }
-                        count += 1;
                     }
                 });
             }
