@@ -249,8 +249,8 @@ pub fn compare_state(
     for before in database_before {
         let after = database_after.iter().find(|a| a.id == before.id);
         let (during, now) = (
-            before.performed && before.exit_code.is_none(),
-            after.is_some_and(|a| a.performed && a.exit_code.is_none()),
+            before.performed && before.exit_code == Some(0),
+            after.is_some_and(|a| a.performed && a.exit_code == Some(0)),
         );
         let rows_during = during.then(|| row_count(&before.text));
         let rows_after = after.filter(|_| now).map(|a| row_count(&a.text));

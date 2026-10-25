@@ -441,6 +441,14 @@ pub fn validate_spec(spec: &ContainerSpec) -> io::Result<()> {
             databases += 1;
         }
     }
+    if spec.egress == Egress::Blocked
+        && spec
+            .services
+            .iter()
+            .any(|s| names.contains(format!("{}-real", s.name).as_str()))
+    {
+        return Err(invalid("コンテナの名前が中継用の接続先名と重複しています"));
+    }
     if databases > 1 {
         return Err(invalid("データベースの役割のコンテナは1件にしてください"));
     }
@@ -821,18 +829,19 @@ impl Session {
         let mut rows: BTreeMap<(String, String), TrafficSummary> = BTreeMap::new();
         let mut unparsed = 0usize;
         let mut truncated = false;
+        let mut unavailable = vec![];
         for service in &self.services {
             let Some(tap) = &service.tap else { continue };
             let edge_ip = addresses.edges.get(tap);
-            let output = docker(&["logs", tap]).ok();
-            let (text, errors) = output
-                .map(|o| {
-                    (
-                        String::from_utf8_lossy(&o.stdout).into_owned(),
-                        String::from_utf8_lossy(&o.stderr).into_owned(),
-                    )
-                })
-                .unwrap_or_default();
+            let output = match docker(&["logs", tap]) {
+                Ok(output) if output.status.success() => output,
+                _ => {
+                    unavailable.push(service.spec.name.as_str());
+                    continue;
+                }
+            };
+            let text = String::from_utf8_lossy(&output.stdout);
+            let errors = String::from_utf8_lossy(&output.stderr);
             if text.len() > MAX_TRAFFIC_LOG || errors.len() > MAX_TRAFFIC_LOG {
                 truncated = true;
             }
@@ -860,16 +869,26 @@ impl Session {
                     let from = clients
                         .get(&client)
                         .cloned()
-                        .unwrap_or_else(|| HOST_CLIENT.to_owned());
+                        .unwrap_or_else(|| format!("不明（{client}）"));
                     record_unfinished(&mut rows, &from, &service.spec.name);
                 }
             }
         }
         let mut summary: Vec<TrafficSummary> = rows.into_values().collect();
+        let omitted_rows = summary.len().saturating_sub(MAX_TRAFFIC_ROWS);
         summary.truncate(MAX_TRAFFIC_ROWS);
         let mut note = String::from(
             "中継を通った接続（接続元・接続先の対象、成否、バイト数）を記録した。閉じなかった接続は件数だけで、成否とバイト数は分からない。中継を通らない通信と、通信の中身は記録していない",
         );
+        if !unavailable.is_empty() {
+            note.push_str(&format!(
+                "。中継ログを取得できず未観測の対象: {}",
+                unavailable.join("、")
+            ));
+        }
+        if omitted_rows > 0 {
+            note.push_str(&format!("。集計の上限により{omitted_rows}組を省略した"));
+        }
         if unparsed > 0 {
             note.push_str(&format!("。読み取れない行が{unparsed}件あった"));
         }
@@ -1740,6 +1759,24 @@ mod tests {
             egress: Egress::default(),
         };
         assert!(validate_spec(&spec).is_err());
+    }
+
+    #[test]
+    fn service_names_cannot_shadow_another_services_real_alias() {
+        let mut spec: ContainerSpec = serde_json::from_str(
+            r#"{"services":[{"name":"app","image":"nginx:1.27.4-alpine@sha256:4ff102c5d78d254a6f0da062b3cf39eaf07f01eec0927fd21e219d0af8bc0591","role":"app","expose":80,"ready":"tcp","ready_timeout_ms":5000}]}"#,
+        ).unwrap();
+        let mut other = spec.services[0].clone();
+        other.name = "app-real".into();
+        spec.services.push(other);
+        assert!(
+            validate_spec(&spec)
+                .unwrap_err()
+                .to_string()
+                .contains("中継用")
+        );
+        spec.egress = Egress::Allowed;
+        assert!(validate_spec(&spec).is_ok());
     }
 
     #[test]

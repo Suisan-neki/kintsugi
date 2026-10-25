@@ -482,21 +482,28 @@ fn database_read(
 fn recovery_comparison_never_reads_an_unreadable_state_as_no_rows() {
     let before = [
         database_read("patient", false, None, ""),
-        database_read("visit", true, None, "v\t1\n"),
+        database_read("visit", true, Some(0), "v\t1\n"),
         database_read("failed", true, Some(1), ""),
-        database_read("soap", true, None, "a\t1\n"),
-        database_read("note", true, None, "a\t1\n"),
-        database_read("dup", true, None, "a\t1\n"),
-        database_read("gone", true, None, "a\t1\nb\t2\n"),
+        database_read("soap", true, Some(0), "a\t1\n"),
+        database_read("note", true, Some(0), "a\t1\n"),
+        database_read("dup", true, Some(0), "a\t1\n"),
+        database_read("gone", true, Some(0), "a\t1\nb\t2\n"),
+        database_read("unknown", true, None, ""),
+        database_read("truncated", true, Some(0), "a\t1\n"),
+        database_read("empty", true, Some(0), ""),
+        database_read("missing", true, Some(0), "a\t1\n"),
     ];
     let after = [
-        database_read("patient", true, None, "p\t1\n"),
+        database_read("patient", true, Some(0), "p\t1\n"),
         database_read("visit", true, Some(1), ""),
-        database_read("failed", true, None, "f\t1\n"),
-        database_read("soap", true, None, "a\t1\n"),
-        database_read("note", true, None, ""),
-        database_read("dup", true, None, "a\t1\na\t1\n"),
-        database_read("gone", true, None, "a\t1\n"),
+        database_read("failed", true, Some(0), "f\t1\n"),
+        database_read("soap", true, Some(0), "a\t1\n"),
+        database_read("note", true, Some(0), ""),
+        database_read("dup", true, Some(0), "a\t1\na\t1\n"),
+        database_read("gone", true, Some(0), "a\t1\n"),
+        database_read("unknown", true, None, ""),
+        database_read("truncated", true, None, ""),
+        database_read("empty", true, Some(0), ""),
     ];
     let changes = compare_state(&before, &after, &[], &[]);
     let by_id = |id: &str| changes.iter().find(|c| c.id == id).unwrap();
@@ -513,6 +520,14 @@ fn recovery_comparison_never_reads_an_unreadable_state_as_no_rows() {
     assert_eq!(by_id("dup").change, "rows_added");
     assert_eq!(by_id("dup").rows_after_recovery, Some(2));
     assert_eq!(by_id("gone").change, "rows_removed");
+    assert_eq!(by_id("unknown").change, "not_observed");
+    assert_eq!(by_id("unknown").rows_during_fault, None);
+    assert_eq!(by_id("unknown").rows_after_recovery, None);
+    assert_eq!(by_id("truncated").change, "unreadable_after_recovery");
+    assert_eq!(by_id("truncated").rows_after_recovery, None);
+    assert_eq!(by_id("empty").change, "unchanged");
+    assert_eq!(by_id("empty").rows_after_recovery, Some(0));
+    assert_eq!(by_id("missing").change, "unreadable_after_recovery");
 }
 
 #[test]

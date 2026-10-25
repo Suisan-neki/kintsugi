@@ -24,6 +24,10 @@ for(const [label,fault] of [['normal','normal'],['database-stopped','database_st
  fs.writeFileSync(path.join(output,label+'.json'),JSON.stringify({verdict:view.checks[0].verdict,evidence:e},null,2));
  console.log(label,JSON.stringify({run:e.manifest.correlation.run_id,prepared:browser?.prepared,completed:browser?.completed,steps:browser?.steps,http:browser?.responses,reads:phase.database_reads,results:trace.trial.results}));
  assert.equal(browser.prepared,true);assert.deepEqual(phase.leftovers,[]);
+ assert.equal(phase.egress,'blocked');assert.equal(phase.egress_confirmed,true);
+ assert(!phase.traffic_note.includes('未観測の対象'),phase.traffic_note);
+ const app=recipe.containers.services.find(s=>s.role==='app').name,db=recipe.containers.services.find(s=>s.role==='database').name;
+ assert(phase.traffic.some(t=>t.from===app&&t.to===db&&t.connections>0&&t.bytes_to_client>0),'application-to-database connections are recorded');
  const checks=trace.trial.results;
  if(fault==='normal'){
   assert.equal(browser.completed,true);for(const c of checks)assert.equal(c.observed,'pass',label+' '+c.id);assert.equal(view.checks[0].verdict,'satisfied');
@@ -49,5 +53,5 @@ for(const [label,fault] of [['normal','normal'],['database-stopped','database_st
 }
 const comparison=cli(['case','compare',caseDir,'--before',results[0].evidence_id,'--after',results[2].evidence_id,'--condition','openemr']);
 fs.writeFileSync(path.join(output,'comparison.json'),JSON.stringify(comparison,null,2));
-fs.writeFileSync(path.join(output,'summary.json'),JSON.stringify({source:recipe.source,results,recovery:'New disposable database and containers; not repair of an existing database.',human_evaluation:'not_conducted'},null,2));
-console.log('SOAP fields, explicit server reload, patient identity, DB-stop fault and fresh retry passed.');
+fs.writeFileSync(path.join(output,'summary.json'),JSON.stringify({source:recipe.source,results,recovery:'Normal, outage and retry use separate disposable environments. The fourth case restarts the stopped database in the same environment and compares declared reads; it does not replay the failed save.',human_evaluation:'not_conducted'},null,2));
+console.log('SOAP fields, explicit server reload, patient identity, DB-stop fault, fresh retry and same-database recovery comparison passed.');
