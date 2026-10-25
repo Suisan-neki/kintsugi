@@ -29,7 +29,7 @@ jobs:
             target
           key: ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
-            ${{ runner.os }}-rust-1.99-${{ hashFiles('Cargo.lock') }}-
+            ${{ runner.os }}-rust-1.99-
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal
       - run: cargo build --locked

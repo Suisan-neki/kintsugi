@@ -17,7 +17,7 @@ mod transport;
 use axum::response::Response;
 const MAX_BODY: usize = 1024 * 1024;
 
-/// 理解と試験の画面。デジタル庁デザインシステムのCSSを同じ応答に含める。
+/// 理解と試験の画面。デジタル庁デザインシステムのCSSは /ui/styles.css から読み込む。
 pub fn app_html(token: &str) -> String {
     styled_app(
         &assets::text("ui/app.html").expect("画面の資材を読み取れません"),
@@ -33,16 +33,16 @@ fn workbench_html(token: &str) -> String {
 }
 
 fn styled_app(html: &str, token: &str) -> String {
-    html.replace(
-        "__APP_STYLE__",
-        &[
-            assets::text("ui/dads/tokens.css").expect("画面の資材を読み取れません"),
-            assets::text("ui/dads/components.css").expect("画面の資材を読み取れません"),
-            assets::text("ui/app.css").expect("画面の資材を読み取れません"),
-        ]
-        .concat(),
-    )
-    .replace("__REVIEW_TOKEN__", token)
+    html.replace("__REVIEW_TOKEN__", token)
+}
+
+fn app_styles() -> io::Result<String> {
+    Ok([
+        assets::text("ui/dads/tokens.css")?,
+        assets::text("ui/dads/components.css")?,
+        assets::text("ui/app.css")?,
+    ]
+    .concat())
 }
 
 /// 画面版で使う、読取記録の保存先とAIの設定。
@@ -75,7 +75,7 @@ fn respond_encoded(
         .header("cache-control","no-store")
         .header("x-content-type-options","nosniff")
         .header("referrer-policy","no-referrer")
-        .header("content-security-policy","default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; img-src 'self' blob:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
+        .header("content-security-policy","default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; img-src 'self' blob:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
         .header("connection","close");
     if !encoding.is_empty() {
         builder = builder.header("content-encoding", "gzip");
@@ -215,6 +215,14 @@ fn handle_request(
                 return script_response(
                     stream,
                     &assets::text(request.path.trim_start_matches('/'))?,
+                );
+            }
+            ("GET", "/ui/styles.css") => {
+                return respond(
+                    stream,
+                    200,
+                    "text/css; charset=utf-8",
+                    app_styles()?.as_bytes(),
                 );
             }
             ("GET", "/ui/web-trial.js") => {
