@@ -2,10 +2,11 @@
 import assert from 'node:assert/strict';
 import {execFileSync,spawn} from 'node:child_process';
 import {mkdir,readFile,writeFile,stat,rm} from 'node:fs/promises';
-import {resolve,join} from 'node:path';
+import {resolve,join,dirname} from 'node:path';
 import net from 'node:net';
 const root=resolve(import.meta.dirname,'..'), binary=process.env.REVIEW_BINARY||join(root,'target/debug/mugiurushi');
 const output=resolve(process.argv[2]||join(root,'evaluations','backend-'+Date.now()));
+await mkdir(dirname(output),{recursive:true});
 await mkdir(output,{recursive:false});
 const casePath=join(output,'case'), tokenPath=join(output,'api-token');
 execFileSync(binary,['case','init',casePath,'--template','general','--id','general-notification','--title','合成の通知確認','--actor','合成の作成者','--reason','APIの一往復']);
