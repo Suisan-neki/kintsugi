@@ -4,14 +4,16 @@ use mugiurushi::review;
 use std::{collections::BTreeMap, io, path::PathBuf};
 
 const HELP: &str = "mugiurushi
-  app DATA_DIR [--port 8765] [--execution-mode local|bubblewrap]
+  app DATA_DIR [--port 8765] [--execution-mode bubblewrap]
   ai init|test [--data-dir data/app]
-  api CASE_DIR --token-file NEW_FILE [--port 8765] [--repository-root DIR --execution-mode local|bubblewrap]
+  api CASE_DIR --token-file NEW_FILE [--port 8765] [--repository-root DIR --execution-mode bubblewrap]
   case init CASE_DIR [--file SPEC_JSON | --id CASE_ID --title TEXT] [--actor TEXT] [--reason TEXT]
   case show CASE_DIR
   case apply CASE_DIR CHANGE_JSON
   case import CASE_DIR RUN_DIR --condition CHECK_ID --actor TEXT --reason TEXT [--use-run-context true|false]
   case execute CASE_DIR RECIPE_JSON --repository-root DIR --mode local|bubblewrap --actor TEXT --reason TEXT
+  case approve CASE_DIR REQUEST_JSON
+  case revoke CASE_DIR
   case report CASE_DIR --output NEW_FILE [--format json|html]
   case backup CASE_DIR --output NEW_JSON
   case restore NEW_CASE_DIR BACKUP_JSON
@@ -19,7 +21,7 @@ const HELP: &str = "mugiurushi
   repo prepare NEW_DIR RECIPE_JSON
   environment inspect|run|show|compare ...
 
-引数なしで現在のアプリを起動します。local方式はOSによる隔離を行いません。";
+引数なしで現在のアプリを起動します。Web実行にはbubblewrapと端末での一回限りの承認が必要です。localは開発ビルドの端末実行専用です。";
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
@@ -68,7 +70,7 @@ pub fn run(args: &[String]) -> io::Result<()> {
         return review::serve_app(
             PathBuf::from("data/app"),
             8765,
-            mugiurushi::execution::ExecutionMode::Local,
+            mugiurushi::execution::ExecutionMode::Bubblewrap,
         );
     };
     match command.as_str() {
@@ -134,7 +136,7 @@ pub fn run(args: &[String]) -> io::Result<()> {
             let port = port(&opts)?;
             let mode = opts
                 .get("--execution-mode")
-                .map_or(Ok(mugiurushi::execution::ExecutionMode::Local), |m| {
+                .map_or(Ok(mugiurushi::execution::ExecutionMode::Bubblewrap), |m| {
                     m.parse()
                 })?;
             review::serve_app(PathBuf::from(&args[1]), port, mode)?;

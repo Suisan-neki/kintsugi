@@ -614,7 +614,7 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
             true
         )
         .0,
-        409
+        403
     );
     let mut foreign = value.clone();
     foreign["recipe"]["source"]["repository"] = "other/project".into();
@@ -631,7 +631,7 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
         403
     );
     assert!(controller.status().unwrap().job.is_none());
-    let (status, job) = review_http(
+    let (status, _) = review_http(
         &case,
         Some(&controller),
         "POST",
@@ -639,12 +639,183 @@ fn review_execution_is_opt_in_authenticated_and_cannot_replace_root_or_mode() {
         &value.to_string(),
         true,
     );
-    assert_eq!(status, 202);
-    assert_eq!(job["status"], "running");
+    assert_eq!(status, 403);
+    assert!(controller.status().unwrap().job.is_none());
+    // 端末側の明示的な開発用実行はHTTPの権限とは別。
+    controller
+        .start(serde_json::from_value(value).unwrap())
+        .unwrap();
     assert_eq!(wait_job(&controller).status, "completed");
     let view = view(load(&case).unwrap());
     assert_eq!(view.checks[0].verdict, Verdict::Satisfied);
     assert_eq!(view.workspace.evidence.len(), 1);
+}
+
+#[test]
+fn web_execution_requires_exact_single_use_terminal_approval_and_never_accepts_local() {
+    use mugiurushi::review_execution::{Controller, ExecuteRequest, approve};
+    let fixture = Fixture::new();
+    let case = review_case(&fixture);
+    let unused = fixture.root.join("forbidden-app-data");
+    assert_eq!(
+        mugiurushi::review::serve_app(unused.clone(), 0, ExecutionMode::Local)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert!(
+        !unused.exists(),
+        "Local指定はデータや待受を作る前に拒否する"
+    );
+    assert_eq!(
+        mugiurushi::review::serve_api(
+            case.clone(),
+            0,
+            unused.join("token"),
+            Some((fixture.root.clone(), ExecutionMode::Local))
+        )
+        .unwrap_err()
+        .kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    let local = Controller::new(case.clone(), fixture.root.clone(), ExecutionMode::Local).unwrap();
+    let isolated = Controller::new(
+        case.clone(),
+        fixture.root.clone(),
+        ExecutionMode::Bubblewrap,
+    )
+    .unwrap();
+    let managed = Controller::managed(
+        case.clone(),
+        fixture.root.join("managed"),
+        ExecutionMode::Bubblewrap,
+    )
+    .unwrap();
+    let value = serde_json::json!({"expected_revision":1,"actor":"Synthetic","reason":"端末で内容を確認した試験","recipe":fixture.recipe(Runtime::Node,"normal")});
+    for route in ["/api/execute", "/api/v1/execute"] {
+        for controller in [&local, &isolated, &managed] {
+            assert_eq!(
+                review_http(
+                    &case,
+                    Some(controller),
+                    "POST",
+                    route,
+                    &value.to_string(),
+                    true
+                )
+                .0,
+                403
+            );
+            assert!(controller.status().unwrap().job.is_none());
+        }
+    }
+    let request: ExecuteRequest = serde_json::from_value(value.clone()).unwrap();
+    approve(&case, &request).unwrap();
+    assert!(approve(&case, &request).is_err(), "承認を上書きしない");
+    for (pointer, change) in [
+        ("/recipe/args", serde_json::json!(["unapproved"])),
+        ("/recipe/input", serde_json::json!({"command":"unapproved"})),
+        ("/recipe/entrypoint", serde_json::json!("other.js")),
+        ("/expected_revision", serde_json::json!(2)),
+        ("/actor", serde_json::json!("other")),
+        ("/reason", serde_json::json!("other")),
+    ] {
+        let mut changed = value.clone();
+        *changed.pointer_mut(pointer).unwrap() = change;
+        assert_eq!(
+            review_http(
+                &case,
+                Some(&isolated),
+                "POST",
+                "/api/v1/execute",
+                &changed.to_string(),
+                true
+            )
+            .0,
+            403
+        );
+        assert!(isolated.status().unwrap().job.is_none());
+    }
+    for (key, nested) in [
+        (
+            "trial",
+            serde_json::json!({"schema_version":1,"fault":"normal","storage":"notes","readback":{"entrypoint":"other.js"},"checks":[]}),
+        ),
+        (
+            "python",
+            serde_json::json!({"dependencies":[{"repository":"other/dependency","commit":"a".repeat(40)}]}),
+        ),
+        (
+            "server",
+            serde_json::json!({"entrypoint":"other.js","args":["{{port}}"],"ready_timeout_ms":1000}),
+        ),
+        (
+            "containers",
+            serde_json::json!({"services":[{"name":"app","image":format!("example@sha256:{}", "a".repeat(64)),"role":"app","expose":80,"env":{"UNAPPROVED":"yes"},"command":["other"],"ready":"tcp","ready_timeout_ms":1000}]}),
+        ),
+    ] {
+        let mut changed = value.clone();
+        changed["recipe"][key] = nested;
+        assert_eq!(
+            review_http(
+                &case,
+                Some(&isolated),
+                "POST",
+                "/api/execute",
+                &changed.to_string(),
+                true
+            )
+            .0,
+            403,
+            "{key}"
+        );
+        assert!(isolated.status().unwrap().job.is_none());
+    }
+    assert_eq!(
+        review_http(
+            &case,
+            Some(&local),
+            "POST",
+            "/api/execute",
+            &value.to_string(),
+            true
+        )
+        .0,
+        403
+    );
+    let mut statuses = std::thread::scope(|scope| {
+        let (case, isolated, value) = (&case, &isolated, &value);
+        let handles = ["/api/execute", "/api/v1/execute"].map(|route| {
+            scope.spawn(move || {
+                review_http(
+                    case,
+                    Some(isolated),
+                    "POST",
+                    route,
+                    &value.to_string(),
+                    true,
+                )
+                .0
+            })
+        });
+        handles.map(|h| h.join().unwrap())
+    });
+    statuses.sort();
+    assert_eq!(statuses, [202, 403], "並行要求も一回だけ受け付ける");
+    // bwrapがない環境でもLocalへ切り替えない。承認の再利用は環境にかかわらず拒否する。
+    wait_job(&isolated);
+    assert_eq!(
+        review_http(
+            &case,
+            Some(&isolated),
+            "POST",
+            "/api/execute",
+            &value.to_string(),
+            true
+        )
+        .0,
+        403
+    );
 }
 
 #[test]

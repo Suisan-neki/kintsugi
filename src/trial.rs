@@ -4,7 +4,8 @@ use crate::model::{Assessment, Manifest, Verdict};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs, io,
+    fs,
+    io::{self, Read},
     path::Path,
 };
 
@@ -462,8 +463,10 @@ pub fn read_state(
         return (Some(state), None);
     }
     state.performed = true;
-    let path = work.join(storage);
-    match fs::symlink_metadata(&path) {
+    // 親ディレクトリのsymlinkでも作業領域の外へ出ないよう、開いたディレクトリを基準にする。
+    let opened = cap_std::fs::Dir::open_ambient_dir(work, cap_std::ambient_authority())
+        .and_then(|directory| directory.symlink_metadata(storage).map(|m| (directory, m)));
+    match opened {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             state.status = "missing".into();
             state.detail = "試行後の作業領域に保存先のファイルがない".into();
@@ -472,20 +475,27 @@ pub fn read_state(
             state.status = "unreadable".into();
             state.detail = format!("保存先の情報を読めない: {e}");
         }
-        Ok(m) if m.is_dir() => {
+        Ok((_, m)) if m.is_dir() => {
             state.status = "directory".into();
             state.detail = "保存先はディレクトリで、ファイルとして読めない".into();
         }
-        Ok(m) if !m.is_file() => {
+        Ok((_, m)) if !m.is_file() => {
             state.status = "unreadable".into();
             state.detail = "保存先が通常のファイルではない".into();
         }
-        Ok(m) if m.len() > MAX_STATE => {
+        Ok((_, m)) if m.len() > MAX_STATE => {
             state.status = "unreadable".into();
             state.bytes = Some(m.len());
             state.detail = "保存先が1MiBを超えるため読み出していない".into();
         }
-        Ok(m) => match fs::read(&path) {
+        Ok((directory, m)) => match directory.open(storage).and_then(|file| {
+            let mut bytes = Vec::new();
+            file.take(MAX_STATE + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > MAX_STATE {
+                return Err(io::Error::other("保存先が1MiBを超えています"));
+            }
+            Ok(bytes)
+        }) {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
                 state.status = "file".into();

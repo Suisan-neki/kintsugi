@@ -12,13 +12,54 @@ use std::{
     thread,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecuteRequest {
     pub expected_revision: u64,
     pub actor: String,
     pub reason: String,
     pub recipe: Recipe,
+}
+
+const APPROVAL_FILE: &str = ".web-execution-approval.json";
+
+fn denied(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, message)
+}
+
+fn approval(
+    directory: &std::path::Path,
+    request: &ExecuteRequest,
+) -> io::Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "case_directory": std::fs::canonicalize(directory)?,
+        "mode": "bubblewrap",
+        "request": serde_json::to_value(request).map_err(io::Error::other)?,
+    }))
+}
+
+/// 端末からだけ呼ぶ。一つの事例版・実行要求を一回だけWebから実行できるよう承認する。
+pub fn approve(directory: &std::path::Path, request: &ExecuteRequest) -> io::Result<()> {
+    execution::validate_recipe(&request.recipe)?;
+    if request.recipe.containers.is_some() || request.recipe.server.is_some() {
+        return Err(denied(
+            "Web実行の隔離方式ではコンテナと待受プロセスに対応していません",
+        ));
+    }
+    if workspace::load(directory)?.revision != request.expected_revision {
+        return Err(denied(
+            "事例の版が一致しません。実行要求を作り直してください",
+        ));
+    }
+    crate::recording::write_json_new(
+        &directory.join(APPROVAL_FILE),
+        &approval(directory, request)?,
+    )
+}
+
+pub fn revoke(directory: &std::path::Path) -> io::Result<()> {
+    std::fs::remove_file(directory.join(APPROVAL_FILE))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -240,7 +281,7 @@ impl Controller {
         })
         .collect();
         Ok(ExecutionStatus {
-            enabled: true,
+            enabled: self.mode == ExecutionMode::Bubblewrap,
             repository,
             repository_root,
             mode: Some(self.mode.label().into()),
@@ -249,7 +290,27 @@ impl Controller {
             runtimes,
         })
     }
+    /// HTTPの共通入口。画面から読めない端末承認と隔離方式の両方を必要とする。
+    pub fn start_web(&self, request: ExecuteRequest) -> io::Result<Job> {
+        self.mode.ensure_web()?;
+        let path = self.directory.join(APPROVAL_FILE);
+        let approved: serde_json::Value = crate::recording::read_json(&path).map_err(|_| {
+            denied("端末での承認が必要です。実行要求を保存し、case approveで承認してください")
+        })?;
+        if approved != approval(&self.directory, &request)? {
+            return Err(denied(
+                "承認した実行要求と一致しません。事例の版・レシピ・記入者・理由を確認してください",
+            ));
+        }
+        // 削除に成功した一つの要求だけが実行へ進む。再送・並行要求は承認を再利用できない。
+        std::fs::remove_file(path).map_err(|_| denied("承認は使用済みか、取り消されています"))?;
+        // 実行開始より前に削除を永続化し、再起動後の承認の復活を防ぐ。
+        std::fs::File::open(&self.directory)?.sync_all()?;
+        self.start(request)
+    }
+    /// 信頼された端末側の呼出し。HTTPハンドラーは必ずstart_webを使う。
     pub fn start(&self, request: ExecuteRequest) -> io::Result<Job> {
+        self.mode.ensure_allowed()?;
         execution::validate_recipe(&request.recipe)?;
         for value in [&request.actor, &request.reason] {
             if value.trim().is_empty() || value.len() > 16384 {

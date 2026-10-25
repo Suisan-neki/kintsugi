@@ -48,6 +48,46 @@ struct Fixture {
     root: PathBuf,
     commits: Vec<String>,
 }
+
+#[test]
+fn stored_file_read_cannot_follow_parent_or_leaf_symlinks_outside_the_work_directory() {
+    use std::os::unix::fs::symlink;
+    let root = new_run_directory(&std::env::temp_dir().join("mugiurushi-storage-boundary"))
+        .unwrap()
+        .0;
+    let work = root.join("work");
+    fs::create_dir(&work).unwrap();
+    fs::write(root.join("host-canary"), "SYNTHETIC_HOST_SECRET").unwrap();
+    symlink(&root, work.join("outside")).unwrap();
+    symlink(root.join("host-canary"), work.join("leaf")).unwrap();
+    fs::write(work.join("normal"), "synthetic-test-value").unwrap();
+    for path in ["outside/host-canary", "leaf", "../host-canary"] {
+        let spec = TrialSpec {
+            schema_version: 1,
+            fault: TrialFault::Normal,
+            storage: Some(path.into()),
+            readback: None,
+            checks: vec![],
+        };
+        let (state, text) = read_state(&spec, &work, "synthetic-test-value");
+        assert_eq!(state.unwrap().status, "unreadable", "{path}");
+        assert!(text.is_none(), "作業領域外の内容を取得しない");
+    }
+    let spec = TrialSpec {
+        schema_version: 1,
+        fault: TrialFault::Normal,
+        storage: Some("normal".into()),
+        readback: None,
+        checks: vec![],
+    };
+    assert_eq!(
+        read_state(&spec, &work, "synthetic-test-value")
+            .1
+            .as_deref(),
+        Some("synthetic-test-value")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
 fn git(root: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")

@@ -29,6 +29,24 @@ pub enum ExecutionMode {
     Bubblewrap,
 }
 impl ExecutionMode {
+    pub fn ensure_web(self) -> io::Result<()> {
+        if self != Self::Bubblewrap {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Web経由のlocal実行は禁止しています。bubblewrapで起動してください",
+            ));
+        }
+        Ok(())
+    }
+    pub fn ensure_allowed(self) -> io::Result<()> {
+        if self == Self::Local && !cfg!(debug_assertions) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "本番ビルドではlocal方式を実行できません。隔離方式を指定してください",
+            ));
+        }
+        Ok(())
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Local => "local",
@@ -44,6 +62,19 @@ impl std::str::FromStr for ExecutionMode {
             "bubblewrap" => Ok(Self::Bubblewrap),
             _ => Err(invalid("実行方式はlocalかbubblewrapです")),
         }
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::ExecutionMode;
+    #[test]
+    fn release_build_never_permits_local_execution() {
+        assert_eq!(
+            ExecutionMode::Local.ensure_allowed().is_ok(),
+            cfg!(debug_assertions)
+        );
+        assert!(ExecutionMode::Bubblewrap.ensure_allowed().is_ok());
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -916,6 +947,7 @@ pub fn execute_with_dependencies(
     previous_run: Option<String>,
     mode: ExecutionMode,
 ) -> io::Result<RunResult> {
+    mode.ensure_allowed()?;
     validate_recipe(&recipe)?;
     if mode == ExecutionMode::Local
         && recipe

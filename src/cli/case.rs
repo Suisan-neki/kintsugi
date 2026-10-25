@@ -145,6 +145,13 @@ pub(super) fn run(args: &[String]) -> io::Result<()> {
                 required(&opts, "--reason")?,
             )?)
         }
+        "approve" if args.len() == 3 => {
+            let request = recording::read_json(&PathBuf::from(&args[2]))?;
+            mugiurushi::review_execution::approve(&directory, &request)?;
+            println!("この実行要求をbubblewrapで一回だけ実行することを承認しました。");
+            Ok(())
+        }
+        "revoke" if args.len() == 2 => mugiurushi::review_execution::revoke(&directory),
         _ => Err(invalid(HELP)),
     }
 }

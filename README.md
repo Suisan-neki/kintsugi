@@ -57,11 +57,23 @@ cargo run
 表示されたlocalhostのURLを開きます。既定の保存先は`data/app`、ポートは8765です。設定ファイルはGitの管理対象外で、既存の設定は上書きしません。利用者向け画面にはキーの入力欄を設けません。
 
 ```bash
-cargo run -- app data/app --port 8765 --execution-mode local
+cargo run -- app data/app --port 8765 --execution-mode bubblewrap
 cargo run -- --help
 ```
 
-`local`はOSによる隔離を行いません。信頼できる対象を使い、実行内容を確認してから試験を開始します。Linuxの`bubblewrap`を指定した場合、隔離を起動できなくてもlocalへ切り替えません。
+Web経由の実行はLinuxの`bubblewrap`を必須とします。隔離を起動できない場合は実行を完了せず、localへ切り替えません。ブラウザからの実行要求には端末での一回限りの承認も必要です。
+
+画面に表示された「実行要求を保存する」からJSONを保存します。端末でコードの固定版・起動内容・引数・入力・読み出し・依存先を確認してから承認し、同じ画面で再試行してください。
+
+```bash
+cargo run -- case approve data/app/case /path/to/execution-request.json
+# 使用前の承認を取り消す場合
+cargo run -- case revoke data/app/case
+```
+
+承認は事例の保存先・版・実行レシピ・記入者・理由と一致する一回の要求だけに使えます。条件を変えた場合は承認し直します。承認ファイルはAPIやバックアップから読み出せません。実行受付後に失敗した場合も承認は再利用できません。
+
+`local`は開発ビルドの端末実行だけに残します。Web経由では拒否し、本番ビルドでは共通の実行入口で拒否します。現在のbubblewrap方式ではコンテナと待受プロセスを扱えないため、これらの試行は開発ビルドのCLIでのみ行えます。macOS等では構成図・対話・記録を利用できますが、Webからの対象コード実行はできません。
 
 Cargoパッケージ名とバイナリ名は`mugiurushi`です。旧名称はexecution-evidence-lab、kintsugiです。
 

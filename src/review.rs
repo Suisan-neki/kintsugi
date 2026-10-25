@@ -560,7 +560,7 @@ fn handle_connection_mode(
                 })
                 .and_then(|controller| {
                     parse_body::<ExecuteRequest>(&request.body)
-                        .and_then(|request| controller.start(request))
+                        .and_then(|request| controller.start_web(request))
                 });
             match result {
                 Ok(job) => json(stream, 202, &job),
@@ -613,6 +613,7 @@ pub fn serve_app(
     port: u16,
     mode: crate::execution::ExecutionMode,
 ) -> io::Result<()> {
+    mode.ensure_web()?;
     std::fs::create_dir_all(&data)?;
     let case = data.join("case");
     if !case.exists() {
@@ -646,6 +647,9 @@ pub fn serve_api(
     token_file: PathBuf,
     execution: Option<(PathBuf, crate::execution::ExecutionMode)>,
 ) -> io::Result<()> {
+    if let Some((_, mode)) = &execution {
+        mode.ensure_web()?;
+    }
     workspace::load(&directory)?;
     let controller = execution
         .map(|(root, mode)| Controller::new(directory.clone(), root, mode))

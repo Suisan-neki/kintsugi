@@ -16,6 +16,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo check --locked
       - run: cargo test --locked
+      - run: cargo test --release --locked --lib mode_tests
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo build --locked
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -31,6 +32,8 @@ jobs:
       - run: npm run test:reader-native
       - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium
+      - name: Install the sandbox used by approved web execution
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - run: npm run test:journey
       - run: npm run test:dialogue
       - run: npm run test:user-trial
