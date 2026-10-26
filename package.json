@@ -10,6 +10,7 @@
     "test:dicom": "node tools/dicom-smoke.mjs",
     "test:browser": "node tools/browser-smoke.mjs",
     "test:browser-handoff": "node tools/browser-handoff-smoke.mjs",
+    "test:result-observations": "node tools/result-observations-smoke.mjs",
     "test:reader-native": "node tools/reader-native-smoke.mjs",
     "demo:queue": "node tools/queue-demo.mjs",
     "test:journey": "node tools/journey-smoke.mjs",

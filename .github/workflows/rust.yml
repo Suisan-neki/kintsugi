@@ -112,6 +112,7 @@ jobs:
       - run: npm run test:journey
       - run: npm run test:dialogue
       - run: npm run test:browser-handoff
+      - run: npm run test:result-observations
       - run: npm run test:user-trial
       - name: Keep synthetic review screenshots
         if: always()
