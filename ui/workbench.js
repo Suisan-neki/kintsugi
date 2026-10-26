@@ -998,6 +998,64 @@ async function runTrial(check, f) {
 }
 
 // ---------- 4. 結果 ----------
+function observationTable(caption, headings, rows) {
+  return h('figure', { class: 'dads-table' }, h('figcaption', { class: 'dads-table__caption' }, caption),
+    h('table', { class: 'dads-table__table', 'data-cell-border': 'bottom' },
+      h('thead', {}, h('tr', {}, headings.map(text => h('th', { class: 'dads-table__col-header', scope: 'col' }, text)))),
+      h('tbody', {}, rows.map(cells => h('tr', {}, cells.map(cell => h('td', {}, cell)))))));
+}
+function recordedNumber(value, unit = '') {
+  return Number.isSafeInteger(value) && value >= 0 ? `${value.toLocaleString('ja-JP')}${unit}` : '未記録';
+}
+function containerObservations(phase) {
+  if (!phase) return null;
+  const policy = phase.egress === 'blocked'
+    ? phase.egress_confirmed === true ? '外部通信を遮断する設定を確認した' : '遮断を指定したが、設定を確認できていない'
+    : phase.egress === 'allowed' ? '外部通信を許可した' : '外部通信の方針は未記録';
+  const traffic = phase.traffic || [];
+  return disclosure('コンテナの通信と隔離',
+    h('div', { 'data-container-observations': '' },
+      h('p', {}, h('strong', {}, '外部通信: '), policy),
+      h('p', { class: 'note' }, '対象のコンテナに適用した設定です。ホスト側の基盤・ブラウザ操作器全体の隔離を示すものではありません。'),
+      traffic.length ? observationTable('接続元・接続先ごとの記録',
+        ['接続元', '接続先', '開始した接続', '中継状態が200以外', '未完了の接続', '送信量（バイト）', '受信量（バイト）'],
+        traffic.map(row => [row.from, row.to, recordedNumber(row.connections, '件'), recordedNumber(row.failed, '件'), recordedNumber(row.unfinished, '件'), recordedNumber(row.bytes_from_client), recordedNumber(row.bytes_to_client)]))
+        : h('p', { class: 'note' }, '接続の集計は記録されていません。通信がなかったことを示すものではありません。'),
+      h('p', { class: 'note' }, '開始した接続には未完了の接続も含みます。中継状態が200以外の件数は、アプリの処理の失敗件数ではありません。未完了の接続の成否とバイト数は不明です。送信量は接続元から接続先、受信量はその逆方向で、記録できた接続の合計です。'),
+      phase.traffic_note ? h('p', {}, h('strong', {}, '採取範囲と不足: '), phase.traffic_note) : h('p', { class: 'note' }, '通信の採取範囲と不足の記録はありません。')));
+}
+const RECOVERY_CHANGE = {
+  not_observed: '比較に必要な観測がない',
+  readable_after_recovery: '復旧後に読み出せた',
+  unreadable_after_recovery: '復旧後に読み出せなかった',
+  unchanged: '読み出した内容は同じ',
+  rows_added: '読み出した行数が増えた',
+  rows_removed: '読み出した行数が減った',
+  changed: '読み出した内容が変わった',
+};
+function recoveryObservations(trace) {
+  const recovery = trace?.trial?.recovery;
+  if (!recovery) return trace?.recipe?.trial?.recovery
+    ? h('p', { class: 'note', 'data-recovery-observations': '' }, '故障の解除を指定しましたが、復旧結果は記録されていません。') : null;
+  const status = !recovery.attempted ? '故障の解除は試みていません'
+    : recovery.effective ? '故障の解除後の状態を確認した' : '故障の解除後の状態を確認できていない';
+  const reading = (change, stage, rows) => h('div', {},
+    change.source === 'database_rows' ? h('p', {}, Number.isSafeInteger(rows) && rows >= 0 ? recordedNumber(rows, '行') : '行数は不明') : null,
+    h('p', {}, stage || '読み出しの詳細は未記録'));
+  return disclosure('DB故障の解除と復旧後の比較',
+    h('div', { 'data-recovery-observations': '' },
+      h('p', {}, h('strong', {}, '故障の解除: '), status),
+      h('p', {}, recovery.applied || '解除処理の詳細は未記録'),
+      h('p', { class: 'note' }, '故障中の判定は変更しません。保存操作の再実行や、保存状態の巻き戻しを行った記録ではありません。'),
+      recovery.services?.length ? observationTable('故障解除後の準備確認', ['対象', '準備の確認', '準備までの時間', '詳細'],
+        recovery.services.map(service => [service.name, service.ready ? '準備できた' : '準備できていない', recordedNumber(service.ready_after_ms, 'ms'), service.detail])) : h('p', { class: 'note' }, 'サービスの準備確認は記録されていません。'),
+      recovery.database_query ? h('p', {}, h('strong', {}, 'DBの応答確認: '), recovery.database_query) : null,
+      recovery.changes?.length ? observationTable('故障中と復旧後の読み出し', ['観測ID', '取得元', '故障中', '復旧後', '比較結果'],
+        recovery.changes.map(change => [change.id, { database_rows: 'データベースの行', http_read: 'HTTP応答' }[change.source] || change.source,
+          reading(change, change.during_fault, change.rows_during_fault), reading(change, change.after_recovery, change.rows_after_recovery),
+          RECOVERY_CHANGE[change.change] || `未対応の比較結果（${change.change}）`])) : h('p', { class: 'note' }, '故障中と復旧後の比較は記録されていません。'),
+      recovery.limits ? h('p', {}, h('strong', {}, '比較で分かる範囲: '), recovery.limits) : null));
+}
 const DIFF_LABEL = { '/source': 'コード参照（コミット・ファイル・行）', '/execution/recipe': '試験の内容（起動・引数・判定条件・故障）', '/execution/tree': 'コミットのファイル一式（tree）', '/execution/exit_code': '終了コード', '/execution/trial': '判定条件ごとの結果と保存先の読み出し', '/execution/python': '依存先の固定コミットとパッケージ情報', '/execution/containers': '試験専用コンテナのイメージと準備', '/execution/runtime_version': '実行環境のバージョン', '/execution/runtime_path': '実行環境の場所', '/execution/mode': '実行の方式', '/check_version': '条件の版', '/manifest/command': '実行したコマンド', '/manifest/condition': '確認項目と版', '/manifest/input': '入力', '/manifest/fault': '故障', '/manifest/source_fingerprint': '対象ファイルの指紋', '/manifest/program_version': '対象の版', '/manifest/mode': '実行の方式（記録上）', '/manifest/os': 'OS', '/manifest/architecture': 'CPUの種類', '/manifest/timeout_ms': '待機の上限', '/manifest/initial_storage': '試行前の保存先', '/manifest/observation_scope': '観測の範囲', '/observation': '判定する観測', '/rule': '判定規則' };
 function renderResult() {
   const body = $('result-body');
@@ -1060,6 +1118,8 @@ function evidenceCard(check, v, e) {
           h('tbody', {}, s.items.map(i => h('tr', {}, h('td', {}, i.scope), h('td', {}, i.expected), h('td', { class: 'observed', 'data-observed': i.observed || 'not_observed' }, OBSERVED[i.observed] || '？ 記録がない'), h('td', {}, i.source), h('td', {}, i.detail)))))),
       s.state ? h('p', {}, h('strong', {}, '保存先の読み出し（麦漆）: '), s.state.detail, s.state.excerpt ? h('pre', { class: 'output' }, s.state.excerpt) : null) : null)
       : h('p', { class: 'note' }, 'この試行は判定条件の表がない形式です。技術的な詳細を確認してください。'),
+    containerObservations(trace?.containers || trace?.trial?.containers),
+    recoveryObservations(trace),
     h('p', {}, h('strong', {}, '次に確認すること: '), v.observed.next_action || '（記録なし）'),
     v.observed.unconfirmed?.length ? disclosure(`確かめていないこと（${v.observed.unconfirmed.length} 件）`, h('ul', { class: 'items' }, v.observed.unconfirmed.map(u => h('li', {}, u)))) : null,
     trace ? h('p', {}, h('strong', {}, 'コードへ戻る: '), `試したコミット ${shortCommit(trace.recipe.source.commit)} の `, button(`${trace.recipe.source.path} ${trace.recipe.source.line}行目（対応づけたコード）`, () => openTrialCode(trace.recipe.source, trace.recipe.source.path, trace.recipe.source.line, trace.recipe.source.end_line), 'text'), ...launchLinks(trace)) : null,
