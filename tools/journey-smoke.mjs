@@ -51,9 +51,15 @@ try {
   const shot = name => page.screenshot({ path: join(output, 'system-' + name + '.png'), fullPage: true });
   const setReference = async value => { if (!await page.locator('.repository-options').evaluate(n => n.open)) await page.getByText('ブランチ・コミットを指定する', { exact: true }).click(); await page.locator('#repository-ref').fill(value); };
   await page.keyboard.press('Tab'); assert.equal(await page.evaluate(() => document.activeElement.textContent), '本文へ移動');
-  await page.getByRole('heading', { name: '医療システムの動作を検証する' }).waitFor();
+  await page.getByRole('heading', { name: '気になる動作を、根拠とともに確かめる' }).waitFor();
   assert.equal(await page.locator('[data-audience], a[href="/user-trial"]').count(), 0);
-  assert.equal(await page.getByRole('link', { name: '構成図を作成せずに検証を設定する', exact: true }).count(), 1);
+  assert.equal(await page.locator('.entry-option[href="/workbench"]').count(), 1);
+  await page.locator('.entry-option[href="#repository-form"]').click();
+  assert.equal(new URL(page.url()).hash, '#repository-form', '構成を調べる選択肢はリポジトリ入力へ進む');
+  await page.locator('.entry-option[href="/workbench"]').click();
+  assert.equal(new URL(page.url()).pathname, '/workbench', '直接設定する選択肢は検証画面を開く');
+  await page.goBack();
+  await page.getByRole('heading', { name: '気になる動作を、根拠とともに確かめる' }).waitFor();
   await page.locator('#verification-items', { hasText: 'まだ検証項目はありません' }).waitFor();
   assert.equal(await page.getByText('まずデモで試す', { exact: true }).count(), 0);
   assert.equal(await page.getByText('モード設定の記入者', { exact: true }).count(), 0);
