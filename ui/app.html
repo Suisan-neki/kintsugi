@@ -16,11 +16,20 @@
   <div id="alert" role="alert"></div>
   <section id="repository-screen" aria-labelledby="repository-heading">
     <p class="eyebrow">開発者のための検証基盤</p>
-    <h1 id="repository-heading">医療システムの動作を検証する</h1>
-    <p>対象の構成とコードを調べ、正常時と障害時の動作を検証します。対象の版・実行条件・観測結果を対応づけて記録し、改修後の再検証と比較へ進めます。</p>
-    <ol class="system-progress" aria-label="検証の流れ"><li>構成とコードを調べる</li><li>条件と観測方法を決める</li><li>実行して結果を比較する</li></ol>
-    <h2>検証対象のリポジトリを読み込む</h2>
-    <form id="repository-form" novalidate>
+    <h1 id="repository-heading">気になる動作を、根拠とともに確かめる</h1>
+    <p class="entry-lead">医療システムの構成や動作を調べ、検証条件と結果を記録します。</p>
+    <div class="entry-example"><p class="entry-example-label">例えば</p><p>「保存の途中で通信が切れたら、データはどうなる？」</p></div>
+    <section class="entry-start" aria-labelledby="entry-start-heading">
+      <h2 id="entry-start-heading">検証の始め方を選ぶ</h2>
+      <div class="entry-options">
+        <a class="entry-option" href="#repository-form"><strong>構成・コードから調べる</strong><span>公開リポジトリの構成図を作り、気になる処理を調べます。</span><span class="entry-option-action">リポジトリを読み込む <span aria-hidden="true">→</span></span></a>
+        <a class="entry-option" href="/workbench"><strong>検証内容を直接設定する</strong><span>構成図を作らず、確認したい動作の登録や検証設定へ進みます。</span><span class="entry-option-action">検証画面を開く <span aria-hidden="true">→</span></span></a>
+      </div>
+    </section>
+    <ol class="system-progress" aria-label="検証の流れ"><li>構成・コードを調べる（必要に応じて）</li><li>条件と観測方法を決める</li><li>実行して結果を比較する</li></ol>
+    <h2 id="repository-form-heading">構成・コードから調べる</h2>
+    <p>リポジトリを読み込み、構成図から検証したい処理を選べます。</p>
+    <form id="repository-form" aria-labelledby="repository-form-heading" novalidate>
       <label class="system-label" for="repository-url">GitHubのリポジトリURL</label>
       <input id="repository-url" class="system-input" type="url" autocomplete="url" placeholder="https://github.com/所有者/リポジトリ" aria-describedby="repository-help repository-error" required>
       <p id="repository-help" class="note">公開リポジトリに対応しています。構成図の生成時に、READMEとコードの抜粋を本サービスが利用するAIへ送ります。対象コードは実行しません。</p>
@@ -29,7 +38,6 @@
       <button id="load-repository" class="dads-button" data-type="solid-fill" data-size="lg" type="submit">構成図を作成する</button>
     </form>
     <p id="ai-availability" role="status" hidden></p>
-    <p><a href="/workbench">構成図を作成せずに検証を設定する</a></p>
     <section class="verification-history" aria-labelledby="verification-history-heading"><h2 id="verification-history-heading">記録済みの検証項目</h2><div id="verification-items"><p class="note">検証の記録を読み込んでいます。</p></div></section>
   </section>
   <section id="system-screen" aria-labelledby="system-heading" hidden>
