@@ -6,8 +6,6 @@
 
 ## 開発の背景
 
-![1ページ目：医療システム開発への新たな参入を支える実行観測基盤](docs/images/presentation/slide-01.png)
-
 ![2ページ目：医療システム開発への参入障壁](docs/images/presentation/slide-02.png)
 
 ![3ページ目：具体的な利用シナリオ](docs/images/presentation/slide-03.png)
