@@ -12,6 +12,28 @@
 
 mugiurushiは、その検証を進めるために必要な知識や作業を支援し、**医療システム開発への参入障壁を下げる**ことを目指しています。確認すべき事項を省くのではなく、開発者が必要な確認に取り組み、その結果を説明できるようにしたいと考えています。
 
+## 資料
+
+開発の背景、利用シナリオ、システム構成と目指す将来像をまとめています。
+
+![1ページ目：医療システム開発への新たな参入を支える実行観測基盤](docs/images/presentation/slide-01.png)
+
+![2ページ目：医療システム開発への参入障壁](docs/images/presentation/slide-02.png)
+
+![3ページ目：具体的な利用シナリオ](docs/images/presentation/slide-03.png)
+
+![4ページ目：プロダクトの概要](docs/images/presentation/slide-04.png)
+
+![5ページ目：開発の背景](docs/images/presentation/slide-05.png)
+
+![6ページ目：想定する利用例](docs/images/presentation/slide-06.png)
+
+![7ページ目：システムの仕組み](docs/images/presentation/slide-07.png)
+
+![8ページ目：目指すべき未来](docs/images/presentation/slide-08.png)
+
+[Canvaで発表スライドを開く](https://www.canva.com/d/J7Dam58VLXlW6Ue)
+
 ## mugiurushiが支援したいこと
 
 mugiurushiの主な利用者は、医療システムを開発・提供する人です。コードやシステムの構成を調べ、正常時や障害時の動作を確かめ、確認できたことと残る課題を整理します。
@@ -42,28 +64,6 @@ mugiurushiは、AIによる調査の支援と、Rustで作る実行・観測基�
 これらは特定の版と条件での検証例です。患者間の記録の混同や権限のない更新を確かめるシナリオは、[今後のデモ案](https://github.com/Suisan-neki/mugiurushi/issues/192)として検討しています。
 
 医療情報のガイドライン全体への自動適合判定や、医療機関への導入可否の保証は実現していません。また、実医療機関での有効性や、検証の負担をどの程度減らせるかは今後の評価課題です。
-
-## 発表資料
-
-開発の背景、利用シナリオ、システム構成と目指す将来像をまとめています。以下は2026年10月27日時点の資料です。
-
-![1ページ目：医療システム開発への新たな参入を支える実行観測基盤](docs/images/presentation/slide-01.png)
-
-![2ページ目：医療システム開発への参入障壁](docs/images/presentation/slide-02.png)
-
-![3ページ目：具体的な利用シナリオ](docs/images/presentation/slide-03.png)
-
-![4ページ目：プロダクトの概要](docs/images/presentation/slide-04.png)
-
-![5ページ目：開発の背景](docs/images/presentation/slide-05.png)
-
-![6ページ目：想定する利用例](docs/images/presentation/slide-06.png)
-
-![7ページ目：システムの仕組み](docs/images/presentation/slide-07.png)
-
-![8ページ目：目指すべき未来](docs/images/presentation/slide-08.png)
-
-[Canvaで発表スライドを開く](https://www.canva.com/d/J7Dam58VLXlW6Ue)
 
 ## 名前について
 
