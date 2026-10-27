@@ -6,9 +6,30 @@
 
 ## 発表資料
 
-[発表スライドを開く（Canva・全8ページ）](https://www.canva.com/d/J7Dam58VLXlW6Ue)
-
 資料では開発の背景、想定する利用例、システム構成と目指す将来像を紹介しています。実装状況は以下を参照してください。
+
+![発表資料 1ページ目：医療システム開発への新たな参入を支える実行観測基盤](docs/images/presentation/slide-01.png)
+
+<details>
+<summary>発表スライドの続きを見る（2〜8ページ）</summary>
+
+![2ページ目：医療システム開発への参入障壁](docs/images/presentation/slide-02.png)
+
+![3ページ目：具体的な利用シナリオ](docs/images/presentation/slide-03.png)
+
+![4ページ目：プロダクトの概要](docs/images/presentation/slide-04.png)
+
+![5ページ目：開発の背景](docs/images/presentation/slide-05.png)
+
+![6ページ目：想定する利用例](docs/images/presentation/slide-06.png)
+
+![7ページ目：システムの仕組み](docs/images/presentation/slide-07.png)
+
+![8ページ目：目指すべき未来](docs/images/presentation/slide-08.png)
+
+</details>
+
+[Canvaで発表スライドを開く](https://www.canva.com/d/J7Dam58VLXlW6Ue)
 
 ## 麦漆で行うこと
 
